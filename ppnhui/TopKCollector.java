@@ -27,7 +27,7 @@ public class TopKCollector {
     private final int k;
     private final PriorityQueue<Pattern> heap;   // min-heap by EU
     private final ReentrantLock lock = new ReentrantLock();
-    private volatile double threshold = 0.0;     // k-th highest EU seen
+    private volatile double threshold = Double.NEGATIVE_INFINITY;  // k-th highest EU seen; -inf means heap not full yet
 
     public TopKCollector(int k) {
         this.k    = k;
@@ -49,7 +49,7 @@ public class TopKCollector {
             if (list.eu < threshold - UPUList.EPSILON) return false;
             heap.offer(new Pattern(list.itemset, list.eu, list.ep));
             if (heap.size() > k) heap.poll();   // evict weakest
-            threshold = heap.size() < k ? 0.0 : heap.peek().eu;
+            threshold = heap.size() < k ? Double.NEGATIVE_INFINITY : heap.peek().eu;
             return true;
         } finally {
             lock.unlock();
@@ -75,7 +75,7 @@ public class TopKCollector {
             try {
                 heap.offer(p);
                 if (heap.size() > k) heap.poll();
-                threshold = heap.size() < k ? 0.0 : heap.peek().eu;
+                threshold = heap.size() < k ? Double.NEGATIVE_INFINITY : heap.peek().eu;
             } finally {
                 lock.unlock();
             }
