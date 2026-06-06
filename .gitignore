@@ -1,0 +1,16 @@
+# Compiled bytecode
+bin_ppnhui/
+*.class
+
+# Experiment output (large, regeneratable)
+results/
+
+# Dataset files (too large for GitHub — share separately)
+data/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
