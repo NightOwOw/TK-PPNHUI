@@ -137,9 +137,9 @@ DataReader → List<Transaction> + ProfitTable
 
 ## 7. Experiment setup (trong Experiment.java)
 
-### Tham số test
-- **k**: {50, 100, 200}
-- **minProb**: {0.1}
+### Tham số test (hiện tại — Chess only)
+- **k**: {50, 60, 70, 80, 90}
+- **minProb**: {0.7}
 - **threads**: {2, 4, 8}
 - **Runs per config**: 3 (lấy median)
 
@@ -148,8 +148,21 @@ DataReader → List<Transaction> + ProfitTable
   - Columns: dataset, algorithm, k, minProb, threads, run, timeTotal_ms, timePhase1_ms, timePhase2_ms, timePhase3_ms, patternsFound
 - `patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt` — top-k patterns từng run
 
+### Output format (console)
+Kết quả in ra dạng bảng ASCII gộp theo từng (k, minProb), có cột Speedup so với SEQ:
+```
+  +-----------+---------+-------------+---------+----------+
+  | Algorithm | Threads |    Time(ms) | Speedup | Patterns |
+  +-----------+---------+-------------+---------+----------+
+  | SEQ       |       1 |     177,349 |   1.00x |       50 |
+  | FJ        |       8 |       2,727 |  65.03x |       50 |
+  ...
+  +-----------+---------+-------------+---------+----------+
+```
+
 ### Cách chạy
 Mở `Experiment.java` → click **Run** trên `main()` trong VS Code/IntelliJ.
+Hoặc PowerShell: `java -cp bin_ppnhui ppnhui.Experiment`
 
 ---
 
@@ -157,8 +170,14 @@ Mở `Experiment.java` → click **Run** trên `main()` trong VS Code/IntelliJ.
 
 ### Ưu tiên cao
 - [ ] **Correctness check**: Xác nhận SEQ và tất cả parallel methods cho cùng dataset trả về đúng cùng tập top-k patterns (EU giống nhau)
-- [ ] **Cập nhật Experiment.java**: điều chỉnh datasets, k values, minProb values theo kế hoạch experiment cho paper
-- [ ] **Chạy full experiments**: chạy trên tất cả datasets, ghi kết quả
+- [ ] **Chạy full experiments**: mở rộng sang Mushroom, Retail, Kosarak, Accidents, PUMSB
+- [ ] **Điều chỉnh tham số**: cập nhật k values và minProb values cho từng dataset trong Experiment.java
+
+### Đã hoàn thành
+- [x] Cài đặt 5 thuật toán: SEQ, FJ, TPB, PLM, PC
+- [x] Experiment.java với output bảng ASCII + speedup column
+- [x] Compile và chạy thành công trên Chess dataset
+- [x] Push code lên GitHub: https://github.com/NightOwOw/TK-PPNHUI
 
 ### Paper (Springer Nature)
 - [ ] Viết manuscript theo template `sn-article-template/sn-article.tex`
@@ -171,15 +190,15 @@ Mở `Experiment.java` → click **Run** trên `main()` trong VS Code/IntelliJ.
   - Parallel Methods (5 strategies, analysis)
   - Experiments (datasets, metrics, results, discussion)
   - Conclusion
-- [ ] Tables: speedup, phase breakdown, scalability với k, scalability với threads
-- [ ] Key insight để nhấn mạnh trong paper:
-  - PLM bị ảnh hưởng nhiều hơn bởi negative items (search space lớn hơn → không share threshold tệ hơn)
-  - TPB competitive với FJ nhờ domain-knowledge partitioning
-  - PC bộc lộ lợi thế trên sparse/uneven datasets
+- [ ] Tables: speedup, phase breakdown, scalability theo k, scalability theo threads
+- [ ] Key insights để nhấn mạnh trong paper:
+  - FJ đạt super-linear speedup do cooperative threshold escalation (thấy rõ trên Chess)
+  - PLM bị ảnh hưởng bởi negative items (search space lớn → không share threshold càng tệ)
+  - PLM có thể slower than SEQ ở thread count thấp — cần giải thích rõ trong paper
+  - PC và TPB hội tụ ở 8 threads do granularity cố định ở 1-itemset level
 
-### Tùy chọn (nếu cần thêm nội dung)
-- [ ] Thêm `ExpScalabilityK.java` — riêng cho experiment scalability theo k
-- [ ] Thêm `ExpScalabilityThreads.java` — riêng cho scalability theo số threads
+### Tùy chọn
+- [ ] Thêm phase breakdown chart (Phase 1 / Phase 2 / Phase 3 time per algo)
 - [ ] So sánh với baseline PTK-HUIM trên positive-only datasets
 
 ---
