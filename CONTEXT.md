@@ -144,12 +144,14 @@ DataReader → List<Transaction> + ProfitTable
 - **Runs per config**: 3 (lấy median)
 
 ### Output files (vào `results/`)
-- `performance.csv` — timing cho mọi config
-  - Columns: dataset, algorithm, k, minProb, threads, run, timeTotal_ms, timePhase1_ms, timePhase2_ms, timePhase3_ms, patternsFound
+- `performance.csv` — timing + work metrics cho mọi config
+  - Columns: dataset, algorithm, k, minProb, threads, run, timeTotal_ms, timePhase1_ms, timePhase2_ms, timePhase3_ms, patternsFound, **nodesExpanded**, **joinsAttempted**
 - `patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt` — top-k patterns từng run
 
 ### Output format (console)
-Kết quả in ra dạng bảng ASCII gộp theo từng (k, minProb), có cột Speedup so với SEQ:
+Mỗi (k, minProb) in ra **hai bảng**:
+
+**Bảng 1 — Timing:**
 ```
   +-----------+---------+-------------+---------+----------+
   | Algorithm | Threads |    Time(ms) | Speedup | Patterns |
@@ -159,6 +161,22 @@ Kết quả in ra dạng bảng ASCII gộp theo từng (k, minProb), có cột 
   ...
   +-----------+---------+-------------+---------+----------+
 ```
+
+**Bảng 2 — Work Metrics:**
+```
+  Work metrics (total across all threads; Work Ratio = joins / SEQ joins):
+  +-----------+---------+--------------------+--------------------+-----------+
+  | Algorithm | Threads |     Nodes Expanded |     Joins Attempted| Work Ratio|
+  +-----------+---------+--------------------+--------------------+-----------+
+  | SEQ       |       1 |    1,234,567,890   |      987,654,321   |     1.000 |
+  | FJ        |       8 |       61,728,394   |       49,382,716   |     0.050 |
+  | PLM       |       8 |    2,469,135,780   |    1,975,308,642   |     2.000 |
+  ...
+  +-----------+---------+--------------------+--------------------+-----------+
+```
+Work Ratio = joins / SEQ_joins:
+- FJ < 1/threads → cooperative threshold escalation (super-linear speedup legitimate)
+- PLM > 1 → isolated thresholds → extra work (confirms "no sharing = slower" claim)
 
 ### Cách chạy
 Mở `Experiment.java` → click **Run** trên `main()` trong VS Code/IntelliJ.
@@ -172,12 +190,17 @@ Hoặc PowerShell: `java -cp bin_ppnhui ppnhui.Experiment`
 - [ ] **Correctness check**: Xác nhận SEQ và tất cả parallel methods cho cùng dataset trả về đúng cùng tập top-k patterns (EU giống nhau)
 - [ ] **Chạy full experiments**: mở rộng sang Mushroom, Retail, Kosarak, Accidents, PUMSB
 - [ ] **Điều chỉnh tham số**: cập nhật k values và minProb values cho từng dataset trong Experiment.java
+- [ ] **Phân tích Work Ratio**: sau khi chạy, kiểm tra FJ Work Ratio < 1/threads (confirms super-linear speedup) và PLM Work Ratio > 1 (confirms threshold isolation overhead)
 
 ### Đã hoàn thành
 - [x] Cài đặt 5 thuật toán: SEQ, FJ, TPB, PLM, PC
 - [x] Experiment.java với output bảng ASCII + speedup column
 - [x] Compile và chạy thành công trên Chess dataset
 - [x] Push code lên GitHub: https://github.com/NightOwOw/TK-PPNHUI
+- [x] Fix TopKCollector bug: threshold khởi tạo là `Double.NEGATIVE_INFINITY` (không phải 0.0) để cho phép negative-EU patterns
+- [x] Thêm work metrics (`nodesExpanded`, `joinsAttempted`) vào tất cả 5 thuật toán (AtomicLong counters)
+- [x] Experiment.java: in bảng Work Metrics (nodes, joins, Work Ratio = joins/SEQ_joins) sau bảng timing
+- [x] CSV output: thêm cột `nodesExpanded`, `joinsAttempted`
 
 ### Paper (Springer Nature)
 - [ ] Viết manuscript theo template `sn-article-template/sn-article.tex`

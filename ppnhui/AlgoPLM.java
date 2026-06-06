@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Parallel Local Mining + Merge TK-PPNHUI.
@@ -19,20 +20,27 @@ import java.util.concurrent.Future;
  * cannot see other threads' discoveries so the threshold rises slower and
  * more nodes are explored. This trade-off is more pronounced for PPNHUI
  * (larger search space due to negative items).
+ *
+ * nodesExpanded and joinsAttempted count total work across all threads.
  */
 public class AlgoPLM {
 
     public static class Result {
         public final List<TopKCollector.Pattern> patterns;
         public final long timeTotal, timePhase1, timePhase2, timePhase3;
+        public final long nodesExpanded;
+        public final long joinsAttempted;
 
         public Result(List<TopKCollector.Pattern> patterns,
-                      long timeTotal, long timePhase1, long timePhase2, long timePhase3) {
-            this.patterns   = patterns;
-            this.timeTotal  = timeTotal;
-            this.timePhase1 = timePhase1;
-            this.timePhase2 = timePhase2;
-            this.timePhase3 = timePhase3;
+                      long timeTotal, long timePhase1, long timePhase2, long timePhase3,
+                      long nodesExpanded, long joinsAttempted) {
+            this.patterns       = patterns;
+            this.timeTotal      = timeTotal;
+            this.timePhase1     = timePhase1;
+            this.timePhase2     = timePhase2;
+            this.timePhase3     = timePhase3;
+            this.nodesExpanded  = nodesExpanded;
+            this.joinsAttempted = joinsAttempted;
         }
     }
 
@@ -46,7 +54,6 @@ public class AlgoPLM {
         List<Integer>         sortedItems = pre.sortedItems;
         Map<Integer, UPUList> lists       = pre.lists;
 
-        // Phase 2: global top-k seeded from 1-itemsets
         TopKCollector global = new TopKCollector(k);
         for (int item : sortedItems) {
             UPUList ul = lists.get(item);
@@ -54,81 +61,85 @@ public class AlgoPLM {
         }
         long t2 = System.currentTimeMillis();
 
-        // Phase 3: PTWU-balanced partitioning, local collectors (no sharing)
         int n = sortedItems.size();
         @SuppressWarnings("unchecked")
         List<Integer>[] buckets = new List[numThreads];
         for (int b = 0; b < numThreads; b++) buckets[b] = new ArrayList<>();
         for (int i = 0; i < n; i++) buckets[i % numThreads].add(sortedItems.get(i));
 
-        // O(1) index lookup
         Map<Integer, Integer> itemIndex = new HashMap<>();
         for (int i = 0; i < n; i++) itemIndex.put(sortedItems.get(i), i);
 
-        ExecutorService pool = Executors.newFixedThreadPool(numThreads);
         final TopKCollector[] locals = new TopKCollector[numThreads];
         for (int b = 0; b < numThreads; b++) locals[b] = new TopKCollector(k);
 
-        List<Future<?>> futures = new ArrayList<>();
+        AtomicLong       nodes   = new AtomicLong();
+        AtomicLong       joins   = new AtomicLong();
+        ExecutorService  pool    = Executors.newFixedThreadPool(numThreads);
+        List<Future<?>>  futures = new ArrayList<>();
+
         for (int b = 0; b < numThreads; b++) {
-            final int            bid    = b;
-            final List<Integer>  bucket = buckets[b];
-            Runnable task = new Runnable() {
-                @Override
-                public void run() {
-                    TopKCollector local = locals[bid];
-                    for (int pItem : bucket) {
-                        UPUList pList = lists.get(pItem);
-                        if (pList == null) continue;
-                        int sIdx = itemIndex.get(pItem) + 1;
-                        dfs(pList, sIdx, sortedItems, lists, local, minProb);
-                    }
+            final int           bid    = b;
+            final List<Integer> bucket = buckets[b];
+            futures.add(pool.submit(() -> {
+                TopKCollector local = locals[bid];
+                for (int pItem : bucket) {
+                    UPUList pList = lists.get(pItem);
+                    if (pList == null) continue;
+                    int sIdx = itemIndex.get(pItem) + 1;
+                    dfs(pList, sIdx, sortedItems, lists, local, minProb, nodes, joins);
                 }
-            };
-            futures.add(pool.submit(task));
+            }));
         }
 
         for (Future<?> f : futures) {
-            try { f.get(); } catch (Exception e) { throw new RuntimeException(e); }
+            try {
+                f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
         pool.shutdown();
 
-        // Merge all local collectors into global
         for (TopKCollector local : locals) global.mergeFrom(local);
 
         long t3 = System.currentTimeMillis();
         return new Result(global.getTopK(),
-            t3 - t0, t1 - t0, t2 - t1, t3 - t2);
+            t3 - t0, t1 - t0, t2 - t1, t3 - t2,
+            nodes.get(), joins.get());
     }
 
     private static void dfs(UPUList prefix, int startIdx,
                              List<Integer> items,
                              Map<Integer, UPUList> lists,
                              TopKCollector collector,
-                             double minProb) {
-
-        double threshold = collector.getThreshold();
-        if (prefix.ptwu < threshold - UPUList.EPSILON) return;
+                             double minProb,
+                             AtomicLong nodes,
+                             AtomicLong joins) {
+        nodes.incrementAndGet();
+        if (prefix.ptwu < collector.getThreshold() - UPUList.EPSILON) return;
 
         for (int i = startIdx; i < items.size(); i++) {
             int extItem = items.get(i);
             UPUList ext = lists.get(extItem);
             if (ext == null) continue;
 
-            UPUList joined = UPUList.join(prefix, ext, extItem, threshold);
+            joins.incrementAndGet();
+            UPUList joined = UPUList.join(prefix, ext, extItem, collector.getThreshold());
             if (joined == null) continue;
 
-            if (joined.ep   < minProb   - UPUList.EPSILON) continue;
-            if (joined.ptwu < threshold - UPUList.EPSILON) continue;
-            if (joined.pub  < threshold - UPUList.EPSILON) continue;
+            if (joined.ep   < minProb                  - UPUList.EPSILON) continue;
+            if (joined.ptwu < collector.getThreshold() - UPUList.EPSILON) continue;
+            if (joined.pub  < collector.getThreshold() - UPUList.EPSILON) continue;
 
-            if (joined.eu >= threshold - UPUList.EPSILON) {
+            if (joined.eu  >= collector.getThreshold() - UPUList.EPSILON) {
                 collector.tryCollect(joined);
-                threshold = collector.getThreshold();
             }
 
-            dfs(joined, i + 1, items, lists, collector, minProb);
-            threshold = collector.getThreshold();
+            dfs(joined, i + 1, items, lists, collector, minProb, nodes, joins);
         }
     }
 }

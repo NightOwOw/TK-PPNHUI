@@ -110,8 +110,9 @@ java -cp bin_ppnhui ppnhui.Experiment
 
 ## Output
 
-### Console — table per (k, minProb) block
+### Console — two tables per (k, minProb) block
 
+**Timing table:**
 ```
 ================================================================
  Dataset: Chess  |  3196 transactions
@@ -137,9 +138,24 @@ java -cp bin_ppnhui ppnhui.Experiment
   +-----------+---------+-------------+---------+----------+
 ```
 
+**Work metrics table** (printed immediately after timing table):
+```
+  Work metrics (total across all threads; Work Ratio = joins / SEQ joins):
+  +-----------+---------+--------------------+--------------------+-----------+
+  | Algorithm | Threads |     Nodes Expanded |     Joins Attempted| Work Ratio|
+  +-----------+---------+--------------------+--------------------+-----------+
+  | SEQ       |       1 |      1,234,567,890 |        987,654,321 |     1.000 |
+  | FJ        |       8 |         61,728,394 |         49,382,716 |     0.050 |
+  | PLM       |       8 |      2,469,135,780 |      1,975,308,642 |     2.000 |
+  ...
+  +-----------+---------+--------------------+--------------------+-----------+
+```
+Work Ratio < 1/threads confirms super-linear speedup via cooperative threshold escalation (FJ).
+Work Ratio > 1 shows extra work from isolated thresholds (PLM).
+
 ### Files — written to `results/`
 
-- `performance.csv` — all timing data for every (dataset, algorithm, k, minProb, threads, run)
+- `performance.csv` — timing + work metrics for every (dataset, algorithm, k, minProb, threads, run); columns include `nodesExpanded` and `joinsAttempted`
 - `patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt` — actual top-k patterns with EU and EP values
 
 ---

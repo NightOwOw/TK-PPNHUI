@@ -10,8 +10,8 @@ import java.util.*;
  * No command-line arguments needed. All paths are relative to the project root.
  *
  * OUTPUT FILES (written to results/ folder):
- *   performance.csv   — timing for every (dataset, algorithm, k, minProb, threads) combo
- *   patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt — top-k patterns for each run
+ *   performance.csv   — timing + work metrics for every config
+ *   patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt — top-k patterns
  */
 public class Experiment {
 
@@ -40,12 +40,16 @@ public class Experiment {
         final int    threads;
         final long   timeMs;
         final int    patterns;
+        final long   nodes;
+        final long   joins;
 
-        Row(String algo, int threads, long timeMs, int patterns) {
+        Row(String algo, int threads, long timeMs, int patterns, long nodes, long joins) {
             this.algo     = algo;
             this.threads  = threads;
             this.timeMs   = timeMs;
             this.patterns = patterns;
+            this.nodes    = nodes;
+            this.joins    = joins;
         }
     }
 
@@ -57,7 +61,8 @@ public class Experiment {
         try (PrintWriter perf = new PrintWriter(new FileWriter(perfPath))) {
 
             perf.println("dataset,algorithm,k,minProb,threads,run," +
-                         "timeTotal_ms,timePhase1_ms,timePhase2_ms,timePhase3_ms,patternsFound");
+                         "timeTotal_ms,timePhase1_ms,timePhase2_ms,timePhase3_ms," +
+                         "patternsFound,nodesExpanded,joinsAttempted");
 
             for (String[] ds : DATASETS) {
                 String dsName = ds[0];
@@ -80,11 +85,9 @@ public class Experiment {
                     for (int k : K_VALUES) {
                         List<Row> rows = new ArrayList<>();
 
-                        // SEQ
                         Row seqRow = collectSEQ(db, pt, k, minProb, dsName, perf);
                         rows.add(seqRow);
 
-                        // Parallel methods, grouped by algo
                         for (int threads : THREAD_COUNTS)
                             rows.add(collectFJ (db, pt, k, minProb, threads, dsName, perf));
                         for (int threads : THREAD_COUNTS)
@@ -95,6 +98,7 @@ public class Experiment {
                             rows.add(collectPC (db, pt, k, minProb, threads, dsName, perf));
 
                         printTable(k, minProb, rows, seqRow.timeMs);
+                        printWorkTable(rows, seqRow.joins);
                     }
                 }
             }
@@ -116,9 +120,8 @@ public class Experiment {
     }
 
     private static void printTable(int k, double minProb, List<Row> rows, long seqTime) {
-        // Column widths: Algorithm(11), Threads(9), Time ms(13), Speedup(9), Patterns(10)
-        String sep  = "  +-----------+---------+-------------+---------+----------+";
-        String hdr  = "  | Algorithm | Threads |    Time(ms) | Speedup | Patterns |";
+        String sep = "  +-----------+---------+-------------+---------+----------+";
+        String hdr = "  | Algorithm | Threads |    Time(ms) | Speedup | Patterns |";
 
         System.out.printf("%n  k=%-3d  minProb=%.2f%n", k, minProb);
         System.out.println(sep);
@@ -130,6 +133,25 @@ public class Experiment {
             String speedupStr = String.format("%.2fx", speedup);
             System.out.printf("  | %-9s | %7d | %,11d | %7s | %8d |%n",
                 r.algo, r.threads, r.timeMs, speedupStr, r.patterns);
+        }
+
+        System.out.println(sep);
+    }
+
+    private static void printWorkTable(List<Row> rows, long seqJoins) {
+        String sep = "  +-----------+---------+--------------------+--------------------+-----------+";
+        String hdr = "  | Algorithm | Threads |     Nodes Expanded |     Joins Attempted| Work Ratio|";
+
+        System.out.println();
+        System.out.println("  Work metrics (total across all threads; Work Ratio = joins / SEQ joins):");
+        System.out.println(sep);
+        System.out.println(hdr);
+        System.out.println(sep);
+
+        for (Row r : rows) {
+            double ratio = (seqJoins > 0) ? (double) r.joins / seqJoins : 0;
+            System.out.printf("  | %-9s | %7d | %,18d | %,18d | %9.3f |%n",
+                r.algo, r.threads, r.nodes, r.joins, ratio);
         }
 
         System.out.println(sep);
@@ -152,13 +174,13 @@ public class Experiment {
         AlgoSEQ.Result res = last;
         long med = median(times);
         for (int r = 0; r < RUNS; r++) {
-            perf.printf("%s,SEQ,%d,%.2f,1,%d,%d,%d,%d,%d,%d%n",
+            perf.printf("%s,SEQ,%d,%.2f,1,%d,%d,%d,%d,%d,%d,%d,%d%n",
                 dsName, k, minProb, r+1,
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
-                res.patterns.size());
+                res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
         writePatterns(res.patterns, dsName, "SEQ", k, minProb, 1);
-        return new Row("SEQ", 1, med, res.patterns.size());
+        return new Row("SEQ", 1, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectFJ(List<Transaction> db, ProfitTable pt,
@@ -174,13 +196,13 @@ public class Experiment {
         AlgoFJ.Result res = last;
         long med = median(times);
         for (int r = 0; r < RUNS; r++) {
-            perf.printf("%s,FJ,%d,%.2f,%d,%d,%d,%d,%d,%d,%d%n",
+            perf.printf("%s,FJ,%d,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
                 dsName, k, minProb, threads, r+1,
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
-                res.patterns.size());
+                res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
         writePatterns(res.patterns, dsName, "FJ", k, minProb, threads);
-        return new Row("FJ", threads, med, res.patterns.size());
+        return new Row("FJ", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectTPB(List<Transaction> db, ProfitTable pt,
@@ -196,13 +218,13 @@ public class Experiment {
         AlgoTPB.Result res = last;
         long med = median(times);
         for (int r = 0; r < RUNS; r++) {
-            perf.printf("%s,TPB,%d,%.2f,%d,%d,%d,%d,%d,%d,%d%n",
+            perf.printf("%s,TPB,%d,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
                 dsName, k, minProb, threads, r+1,
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
-                res.patterns.size());
+                res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
         writePatterns(res.patterns, dsName, "TPB", k, minProb, threads);
-        return new Row("TPB", threads, med, res.patterns.size());
+        return new Row("TPB", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectPLM(List<Transaction> db, ProfitTable pt,
@@ -218,13 +240,13 @@ public class Experiment {
         AlgoPLM.Result res = last;
         long med = median(times);
         for (int r = 0; r < RUNS; r++) {
-            perf.printf("%s,PLM,%d,%.2f,%d,%d,%d,%d,%d,%d,%d%n",
+            perf.printf("%s,PLM,%d,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
                 dsName, k, minProb, threads, r+1,
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
-                res.patterns.size());
+                res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
         writePatterns(res.patterns, dsName, "PLM", k, minProb, threads);
-        return new Row("PLM", threads, med, res.patterns.size());
+        return new Row("PLM", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectPC(List<Transaction> db, ProfitTable pt,
@@ -240,13 +262,13 @@ public class Experiment {
         AlgoPC.Result res = last;
         long med = median(times);
         for (int r = 0; r < RUNS; r++) {
-            perf.printf("%s,PC,%d,%.2f,%d,%d,%d,%d,%d,%d,%d%n",
+            perf.printf("%s,PC,%d,%.2f,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
                 dsName, k, minProb, threads, r+1,
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
-                res.patterns.size());
+                res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
         writePatterns(res.patterns, dsName, "PC", k, minProb, threads);
-        return new Row("PC", threads, med, res.patterns.size());
+        return new Row("PC", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     // -------------------------------------------------------------------------
