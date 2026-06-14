@@ -121,17 +121,27 @@ DataReader → List<Transaction> + ProfitTable
 - Database: `item:qty:prob item:qty:prob ...` (mỗi dòng 1 transaction)
 - Profit: `item profit` (mỗi dòng 1 item, profit có thể âm)
 
-| Dataset  | File database              | File profit              |
-|----------|---------------------------|--------------------------|
-| Chess    | chess_database.txt        | chess_profit.txt         |
-| Mushroom | mushroom_database.txt     | mushroom_profit.txt      |
-| Retail   | retail_database.txt       | retail_profit.txt        |
-| Kosarak  | kosarak_database.txt      | kosarak_profit.txt       |
-| Accidents| accidents_database.txt    | accidents_profit.txt     |
-| PUMSB    | pumsb_database.txt        | pumsb_profit.txt         |
-| TCGA     | tcga_transactions.txt     | tcga_profits.txt         |
-| FAERS    | FAERS_transactions.txt    | FAERS_profits.txt        |
-| WQX      | wqx_transactions.txt      | wqx_profits.txt          |
+| Dataset  | File database              | File profit              | Trạng thái |
+|----------|---------------------------|--------------------------|------------|
+| Chess    | chess_database.txt        | chess_profit.txt         | **Có sẵn** |
+| Mushroom | mushroom_database.txt     | mushroom_profit.txt      | **Có sẵn** |
+| Retail   | retail_database.txt       | retail_profit.txt        | **Có sẵn** |
+| Kosarak  | kosarak_database.txt      | kosarak_profit.txt       | Chưa có    |
+| Accidents| accidents_database.txt    | accidents_profit.txt     | Chưa có    |
+| PUMSB    | pumsb_database.txt        | pumsb_profit.txt         | Chưa có    |
+| Liquor   | liquor_database.txt       | liquor_profit.txt        | **Có sẵn** (52,131 tx, 4,026 items, avg len 7.87, 30% negative profit) |
+
+### Tạo dataset Liquor
+Script `convert_liquor.py` (ở root project) merge 2 file nguồn:
+- `data/liquor_11.txt` — HUIM format (utilities)
+- `data/liquor_11frequent_uncertain.txt` — uncertain format (probabilities)
+
+Output:
+- `data/liquor_database.txt` — `item:1:prob` per token (qty=1 for all)
+- `data/liquor_profit.txt` — 30% items có profit âm (lowest-utility items bị negate)
+
+Chạy lại conversion: `python convert_liquor.py`  
+Điều chỉnh tỷ lệ negative: thay `NEG_FRACTION = 0.30` trong script.
 
 ---
 
@@ -143,8 +153,18 @@ DataReader → List<Transaction> + ProfitTable
 - **threads**: {2, 4, 8}
 - **Runs per config**: 3 (lấy median)
 
-### Output files (vào `results/`)
-- `performance.csv` — timing + work metrics cho mọi config
+### Output files — tổ chức theo thư mục dataset
+Mỗi dataset có thư mục riêng `results/<DatasetName>/`:
+```
+results/
+├── Chess/
+│   ├── performance.csv
+│   ├── patterns_Chess_SEQ_k10_p0.70_t1.txt
+│   └── ...
+├── Mushroom/
+│   └── ...
+```
+- `performance.csv` — timing + work metrics cho mọi config của dataset đó
   - Columns: dataset, algorithm, k, minProb, threads, run, timeTotal_ms, timePhase1_ms, timePhase2_ms, timePhase3_ms, patternsFound, **nodesExpanded**, **joinsAttempted**
 - `patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt` — top-k patterns từng run
 

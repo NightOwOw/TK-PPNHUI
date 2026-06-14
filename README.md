@@ -153,9 +153,23 @@ java -cp bin_ppnhui ppnhui.Experiment
 Work Ratio < 1/threads confirms super-linear speedup via cooperative threshold escalation (FJ).
 Work Ratio > 1 shows extra work from isolated thresholds (PLM).
 
-### Files — written to `results/`
+### Files — written to `results/<DatasetName>/`
 
-- `performance.csv` — timing + work metrics for every (dataset, algorithm, k, minProb, threads, run); columns include `nodesExpanded` and `joinsAttempted`
+Each dataset gets its own subfolder:
+
+```
+results/
+├── Chess/
+│   ├── performance.csv
+│   ├── patterns_Chess_SEQ_k10_p0.70_t1.txt
+│   ├── patterns_Chess_FJ_k10_p0.70_t2.txt
+│   └── ...
+├── Mushroom/
+│   ├── performance.csv
+│   └── ...
+```
+
+- `performance.csv` — timing + work metrics for every (algorithm, k, minProb, threads, run); columns include `nodesExpanded` and `joinsAttempted`
 - `patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt` — actual top-k patterns with EU and EP values
 
 ---
@@ -180,17 +194,14 @@ Work Ratio > 1 shows extra work from isolated thresholds (PLM).
 
 Dataset files are **not included in this repository** (total size > 600 MB). Place them in the `data/` folder:
 
-| Dataset | Transactions | Items | Avg Len |
-|---------|-------------|-------|---------|
-| Chess | 3,196 | 75 | 37.0 |
-| Mushroom | 8,124 | 119 | 23.0 |
-| Retail | 88,162 | 16,470 | 10.3 |
-| Kosarak | 990,002 | 41,270 | 8.1 |
-| Accidents | 340,183 | 468 | 33.8 |
-| PUMSB | 49,046 | 2,113 | 74.0 |
-| TCGA | — | — | — |
-| FAERS | — | — | — |
-| WQX | — | — | — |
+| Dataset | Transactions | Items | Avg Len | Available |
+|---------|-------------|-------|---------|-----------|
+| Chess | 3,196 | 75 | 37.0 | Yes |
+| Mushroom | 8,124 | 119 | 23.0 | Yes |
+| Retail | 88,162 | 16,470 | 10.3 | Yes |
+| Liquor | 52,131 | 4,026 | 7.87 | Yes (converted) |
+
+The Liquor dataset was derived from the [SPMF public datasets](https://www.philippe-fournier-viger.com/spmf/index.php?link=datasets.php) by merging `liquor_11.txt` (HUIM utilities) and `liquor_11frequent_uncertain.txt` (existential probabilities). Run `python convert_liquor.py` from the project root to regenerate it.
 
 ---
 

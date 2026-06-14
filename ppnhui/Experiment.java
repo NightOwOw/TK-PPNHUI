@@ -20,13 +20,13 @@ public class Experiment {
     // -------------------------------------------------------------------------
 
     static final String[][] DATASETS = {
-        {"Chess",    "data/chess_database.txt",    "data/chess_profit.txt"},
+        //{"Chess",    "data/chess_database.txt",    "data/chess_profit.txt"},
         //{"Mushroom", "data/mushroom_database.txt", "data/mushroom_profit.txt"},
-        //{"Retail",   "data/retail_database.txt",   "data/retail_profit.txt"},
-        //{"Kosarak",  "data/kosarak_database.txt",  "data/kosarak_profit.txt"},
+        {"Retail",   "data/retail_database.txt",   "data/retail_profit.txt"},
+        //{"Liquor",   "data/liquor_database.txt",   "data/liquor_profit.txt"},
     };
 
-    static final int[]    K_VALUES      = {50, 60, 70, 80, 90};
+    static final int[]    K_VALUES      = {500, 600, 700, 800, 900};
     static final double[] MIN_PROBS     = {0.7};
     static final int[]    THREAD_COUNTS = {2, 4, 8};
     static final int      RUNS          = 3;
@@ -57,27 +57,31 @@ public class Experiment {
     public static void main(String[] args) throws Exception {
         new File(OUT_DIR).mkdirs();
 
-        String perfPath = OUT_DIR + "/performance.csv";
-        try (PrintWriter perf = new PrintWriter(new FileWriter(perfPath))) {
+        for (String[] ds : DATASETS) {
+            String dsName = ds[0];
+            String dbPath = ds[1];
+            String ptPath = ds[2];
 
-            perf.println("dataset,algorithm,k,minProb,threads,run," +
-                         "timeTotal_ms,timePhase1_ms,timePhase2_ms,timePhase3_ms," +
-                         "patternsFound,nodesExpanded,joinsAttempted");
+            List<Transaction> db;
+            ProfitTable pt;
+            try {
+                db = DataReader.readDatabase(dbPath);
+                pt = DataReader.readProfitTable(ptPath);
+            } catch (Exception e) {
+                System.out.println("[SKIP] Cannot load " + dsName + ": " + e.getMessage());
+                continue;
+            }
 
-            for (String[] ds : DATASETS) {
-                String dsName = ds[0];
-                String dbPath = ds[1];
-                String ptPath = ds[2];
+            // Per-dataset output directory: results/<DatasetName>/
+            String dsDir = OUT_DIR + "/" + dsName;
+            new File(dsDir).mkdirs();
 
-                List<Transaction> db;
-                ProfitTable pt;
-                try {
-                    db = DataReader.readDatabase(dbPath);
-                    pt = DataReader.readProfitTable(ptPath);
-                } catch (Exception e) {
-                    System.out.println("[SKIP] Cannot load " + dsName + ": " + e.getMessage());
-                    continue;
-                }
+            String perfPath = dsDir + "/performance.csv";
+            try (PrintWriter perf = new PrintWriter(new FileWriter(perfPath), true)) {
+
+                perf.println("dataset,algorithm,k,minProb,threads,run," +
+                             "timeTotal_ms,timePhase1_ms,timePhase2_ms,timePhase3_ms," +
+                             "patternsFound,nodesExpanded,joinsAttempted");
 
                 printDatasetHeader(dsName, db.size());
 
@@ -85,25 +89,26 @@ public class Experiment {
                     for (int k : K_VALUES) {
                         List<Row> rows = new ArrayList<>();
 
-                        Row seqRow = collectSEQ(db, pt, k, minProb, dsName, perf);
+                        Row seqRow = collectSEQ(db, pt, k, minProb, dsName, dsDir, perf);
                         rows.add(seqRow);
 
                         for (int threads : THREAD_COUNTS)
-                            rows.add(collectFJ (db, pt, k, minProb, threads, dsName, perf));
+                            rows.add(collectFJ (db, pt, k, minProb, threads, dsName, dsDir, perf));
                         for (int threads : THREAD_COUNTS)
-                            rows.add(collectTPB(db, pt, k, minProb, threads, dsName, perf));
+                            rows.add(collectTPB(db, pt, k, minProb, threads, dsName, dsDir, perf));
                         for (int threads : THREAD_COUNTS)
-                            rows.add(collectPLM(db, pt, k, minProb, threads, dsName, perf));
+                            rows.add(collectPLM(db, pt, k, minProb, threads, dsName, dsDir, perf));
                         for (int threads : THREAD_COUNTS)
-                            rows.add(collectPC (db, pt, k, minProb, threads, dsName, perf));
+                            rows.add(collectPC (db, pt, k, minProb, threads, dsName, dsDir, perf));
 
                         printTable(k, minProb, rows, seqRow.timeMs);
                         printWorkTable(rows, seqRow.joins);
                     }
                 }
             }
+            System.out.println("  -> Results written to: " + dsDir + "/");
         }
-        System.out.println("\nDone. Performance written to: " + perfPath);
+        System.out.println("\nDone.");
     }
 
     // -------------------------------------------------------------------------
@@ -163,7 +168,7 @@ public class Experiment {
 
     private static Row collectSEQ(List<Transaction> db, ProfitTable pt,
                                    int k, double minProb,
-                                   String dsName, PrintWriter perf) {
+                                   String dsName, String dsDir, PrintWriter perf) {
         long[] times = new long[RUNS];
         AlgoSEQ.Result last = AlgoSEQ.mine(db, pt, k, minProb);
         times[0] = last.timeTotal;
@@ -179,13 +184,13 @@ public class Experiment {
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
                 res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
-        writePatterns(res.patterns, dsName, "SEQ", k, minProb, 1);
+        writePatterns(res.patterns, dsName, dsDir, "SEQ", k, minProb, 1);
         return new Row("SEQ", 1, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectFJ(List<Transaction> db, ProfitTable pt,
                                   int k, double minProb, int threads,
-                                  String dsName, PrintWriter perf) {
+                                  String dsName, String dsDir, PrintWriter perf) {
         long[] times = new long[RUNS];
         AlgoFJ.Result last = AlgoFJ.mine(db, pt, k, minProb, threads);
         times[0] = last.timeTotal;
@@ -201,13 +206,13 @@ public class Experiment {
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
                 res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
-        writePatterns(res.patterns, dsName, "FJ", k, minProb, threads);
+        writePatterns(res.patterns, dsName, dsDir, "FJ", k, minProb, threads);
         return new Row("FJ", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectTPB(List<Transaction> db, ProfitTable pt,
                                    int k, double minProb, int threads,
-                                   String dsName, PrintWriter perf) {
+                                   String dsName, String dsDir, PrintWriter perf) {
         long[] times = new long[RUNS];
         AlgoTPB.Result last = AlgoTPB.mine(db, pt, k, minProb, threads);
         times[0] = last.timeTotal;
@@ -223,13 +228,13 @@ public class Experiment {
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
                 res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
-        writePatterns(res.patterns, dsName, "TPB", k, minProb, threads);
+        writePatterns(res.patterns, dsName, dsDir, "TPB", k, minProb, threads);
         return new Row("TPB", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectPLM(List<Transaction> db, ProfitTable pt,
                                    int k, double minProb, int threads,
-                                   String dsName, PrintWriter perf) {
+                                   String dsName, String dsDir, PrintWriter perf) {
         long[] times = new long[RUNS];
         AlgoPLM.Result last = AlgoPLM.mine(db, pt, k, minProb, threads);
         times[0] = last.timeTotal;
@@ -245,13 +250,13 @@ public class Experiment {
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
                 res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
-        writePatterns(res.patterns, dsName, "PLM", k, minProb, threads);
+        writePatterns(res.patterns, dsName, dsDir, "PLM", k, minProb, threads);
         return new Row("PLM", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
     private static Row collectPC(List<Transaction> db, ProfitTable pt,
                                   int k, double minProb, int threads,
-                                  String dsName, PrintWriter perf) {
+                                  String dsName, String dsDir, PrintWriter perf) {
         long[] times = new long[RUNS];
         AlgoPC.Result last = AlgoPC.mine(db, pt, k, minProb, threads);
         times[0] = last.timeTotal;
@@ -267,7 +272,7 @@ public class Experiment {
                 times[r], res.timePhase1, res.timePhase2, res.timePhase3,
                 res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
         }
-        writePatterns(res.patterns, dsName, "PC", k, minProb, threads);
+        writePatterns(res.patterns, dsName, dsDir, "PC", k, minProb, threads);
         return new Row("PC", threads, med, res.patterns.size(), res.nodesExpanded, res.joinsAttempted);
     }
 
@@ -276,9 +281,9 @@ public class Experiment {
     // -------------------------------------------------------------------------
 
     private static void writePatterns(List<TopKCollector.Pattern> patterns,
-                                      String ds, String algo, int k, double minProb, int threads) {
+                                      String ds, String dsDir, String algo, int k, double minProb, int threads) {
         String fname = String.format("%s/patterns_%s_%s_k%d_p%.2f_t%d.txt",
-                                     OUT_DIR, ds, algo, k, minProb, threads);
+                                     dsDir, ds, algo, k, minProb, threads);
         try (PrintWriter pw = new PrintWriter(new FileWriter(fname))) {
             pw.printf("# Dataset=%s  Algo=%s  k=%d  minProb=%.2f  threads=%d%n",
                       ds, algo, k, minProb, threads);
