@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * ThreadPool + PTWU-Balanced static partitioning TK-PPNHUI.
@@ -17,6 +17,15 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * A single shared TopKCollector lets the threshold rise globally.
  * nodesExpanded and joinsAttempted count total work across all threads.
+ *
+ * NOTE ON DAEMON WORKERS
+ *   The pool is built with a daemon thread factory. When the experiment harness
+ *   abandons a run on timeout it can only interrupt its own worker; the mining
+ *   loops do not poll the interrupt flag, so these threads keep running. As
+ *   non-daemon threads they would prevent the JVM from exiting at the end of the
+ *   sweep, losing the whole batch. As daemons they merely consume CPU until they
+ *   finish, which is why the harness abandons the configuration rather than
+ *   retrying it.
  */
 public class AlgoTPB {
 
@@ -39,8 +48,18 @@ public class AlgoTPB {
         }
     }
 
+    /** Daemon workers, named for readability in thread dumps. */
+    static ExecutorService daemonPool(int numThreads, String prefix) {
+        final int[] seq = {0};
+        return Executors.newFixedThreadPool(numThreads, r -> {
+            Thread t = new Thread(r, prefix + "-" + (seq[0]++));
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
     public static Result mine(List<Transaction> db, ProfitTable pt,
-                               int k, double minProb, int numThreads) {
+                               MiningTarget target, double minProb, int numThreads) {
         long t0 = System.currentTimeMillis();
 
         UPUList.BuildResult   pre         = UPUList.buildAll(db, pt, minProb);
@@ -48,7 +67,7 @@ public class AlgoTPB {
 
         List<Integer>         sortedItems = pre.sortedItems;
         Map<Integer, UPUList> lists       = pre.lists;
-        TopKCollector         collector   = new TopKCollector(k);
+        TopKCollector         collector   = target.newCollector();
 
         for (int item : sortedItems) {
             UPUList ul = lists.get(item);
@@ -65,15 +84,16 @@ public class AlgoTPB {
         Map<Integer, Integer> itemIndex = new HashMap<>();
         for (int i = 0; i < n; i++) itemIndex.put(sortedItems.get(i), i);
 
-        AtomicLong       nodes   = new AtomicLong();
-        AtomicLong       joins   = new AtomicLong();
-        ExecutorService  pool    = Executors.newFixedThreadPool(numThreads);
+        LongAdder        nodes   = new LongAdder();
+        LongAdder        joins   = new LongAdder();
+        ExecutorService  pool    = daemonPool(numThreads, "tpb");
         List<Future<?>>  futures = new ArrayList<>();
 
         for (int b = 0; b < numThreads; b++) {
             final List<Integer> bucket = buckets[b];
             futures.add(pool.submit(() -> {
                 for (int pItem : bucket) {
+                    if (Cancel.isCancelled()) break;
                     UPUList pList = lists.get(pItem);
                     if (pList == null) continue;
                     int sIdx = itemIndex.get(pItem) + 1;
@@ -82,22 +102,25 @@ public class AlgoTPB {
             }));
         }
 
-        for (Future<?> f : futures) {
-            try {
-                f.get();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(e);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+        try {
+            for (Future<?> f : futures) {
+                try {
+                    f.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(e);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
             }
+        } finally {
+            pool.shutdown();
         }
-        pool.shutdown();
         long t3 = System.currentTimeMillis();
 
         return new Result(collector.getTopK(),
             t3 - t0, t1 - t0, t2 - t1, t3 - t2,
-            nodes.get(), joins.get());
+            nodes.sum(), joins.sum());
     }
 
     private static void dfs(UPUList prefix, int startIdx,
@@ -105,17 +128,24 @@ public class AlgoTPB {
                              Map<Integer, UPUList> lists,
                              TopKCollector collector,
                              double minProb,
-                             AtomicLong nodes,
-                             AtomicLong joins) {
-        nodes.incrementAndGet();
+                             LongAdder nodes,
+                             LongAdder joins) {
+        if (Cancel.isCancelled()) return;   // abandoned run: unwind
+        nodes.increment();
         if (prefix.ptwu < collector.getThreshold() - UPUList.EPSILON) return;
 
         for (int i = startIdx; i < items.size(); i++) {
+            // Checked here, not only on entry: a cancelled run must not keep
+            // paying for joins. Returning from the recursive call is not enough,
+            // because this loop would carry on building the remaining
+            // extensions of the current prefix, and a join is the single most
+            // expensive thing the miner does.
+            if (Cancel.isCancelled()) return;
             int extItem = items.get(i);
             UPUList ext = lists.get(extItem);
             if (ext == null) continue;
 
-            joins.incrementAndGet();
+            joins.increment();
             UPUList joined = UPUList.join(prefix, ext, extItem, collector.getThreshold());
             if (joined == null) continue;
 

@@ -138,6 +138,17 @@ public class UPUList {
      * co-occur with positive items (PTWU > 0) and EP >= minProb are included.
      */
     public static BuildResult buildAll(List<Transaction> db, ProfitTable pt, double minProb) {
+        return buildAll(db, pt, minProb, false);   // default: PTWU-descending (original behavior)
+    }
+
+    /**
+     * Overload allowing the item order to be chosen.
+     * ascending=false -> PTWU descending (proposed method, original behavior).
+     * ascending=true  -> PTWU ascending (FHM/FHN-style order, used by the FHN baseline).
+     * The suffix/remaining and rank arrays follow whichever order is chosen, so
+     * upper bounds stay valid for a DFS that extends toward higher rank indices.
+     */
+    public static BuildResult buildAll(List<Transaction> db, ProfitTable pt, double minProb, boolean ascending) {
 
         // --- Phase 1a: find max item ID ---
         int maxItem = 0;
@@ -181,7 +192,8 @@ public class UPUList {
         }
 
         // --- Phase 1d: rank by PTWU descending ---
-        validItems.sort((a, b) -> Double.compare(ptwu[b], ptwu[a]));
+        if (ascending) validItems.sort((a, b) -> Double.compare(ptwu[a], ptwu[b]));
+        else           validItems.sort((a, b) -> Double.compare(ptwu[b], ptwu[a]));
 
         int[] rank = new int[maxItem + 1];
         Arrays.fill(rank, -1);

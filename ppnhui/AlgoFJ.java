@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RecursiveAction;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * ForkJoin (work-stealing) parallel TK-PPNHUI.
@@ -13,8 +13,18 @@ import java.util.concurrent.atomic.AtomicLong;
  * automatically balances load across threads. A single shared TopKCollector
  * allows every thread to benefit from the rising admission threshold.
  *
- * nodesExpanded and joinsAttempted are shared AtomicLongs across all tasks,
- * measuring total work done by all threads combined.
+ * nodesExpanded and joinsAttempted are shared LongAdders across all tasks,
+ * measuring total work done by all threads combined. LongAdder replaces
+ * AtomicLong because the counters are touched once per DFS node and once per
+ * join: a single atomic cell would serialise every worker on one cache line
+ * and depress the measured speedup at high thread counts.
+ *
+ * NOTE ON TRAVERSAL ORDER
+ *   compute() forks the left half and computes the right half, so with a single
+ *   worker the pool's deque is drained LIFO and the top-level prefixes are
+ *   visited in reverse order — that is, PTWU-ascending, the opposite of SEQ.
+ *   This is why FJ already does less work than SEQ at one thread, and it is a
+ *   property of the task decomposition rather than of work stealing.
  */
 public class AlgoFJ {
 
@@ -38,7 +48,7 @@ public class AlgoFJ {
     }
 
     public static Result mine(List<Transaction> db, ProfitTable pt,
-                               int k, double minProb, int numThreads) {
+                               MiningTarget target, double minProb, int numThreads) {
         long t0 = System.currentTimeMillis();
 
         UPUList.BuildResult   pre         = UPUList.buildAll(db, pt, minProb);
@@ -46,7 +56,7 @@ public class AlgoFJ {
 
         List<Integer>         sortedItems = pre.sortedItems;
         Map<Integer, UPUList> lists       = pre.lists;
-        TopKCollector         collector   = new TopKCollector(k);
+        TopKCollector         collector   = target.newCollector();
 
         for (int item : sortedItems) {
             UPUList ul = lists.get(item);
@@ -54,8 +64,8 @@ public class AlgoFJ {
         }
         long t2 = System.currentTimeMillis();
 
-        AtomicLong nodes = new AtomicLong();
-        AtomicLong joins = new AtomicLong();
+        LongAdder nodes = new LongAdder();
+        LongAdder joins = new LongAdder();
 
         ForkJoinPool pool = new ForkJoinPool(numThreads);
         try {
@@ -68,7 +78,7 @@ public class AlgoFJ {
 
         return new Result(collector.getTopK(),
             t3 - t0, t1 - t0, t2 - t1, t3 - t2,
-            nodes.get(), joins.get());
+            nodes.sum(), joins.sum());
     }
 
     // -------------------------------------------------------------------------
@@ -83,13 +93,13 @@ public class AlgoFJ {
         private final Map<Integer, UPUList> lists;
         private final TopKCollector         collector;
         private final double                minProb;
-        private final AtomicLong            nodes;
-        private final AtomicLong            joins;
+        private final LongAdder             nodes;
+        private final LongAdder             joins;
 
         PrefixBatchTask(List<Integer> sortedItems, int from, int to,
                         Map<Integer, UPUList> lists,
                         TopKCollector collector, double minProb,
-                        AtomicLong nodes, AtomicLong joins) {
+                        LongAdder nodes, LongAdder joins) {
             this.sortedItems = sortedItems;
             this.from        = from;
             this.to          = to;
@@ -102,6 +112,7 @@ public class AlgoFJ {
 
         @Override
         protected void compute() {
+            if (Cancel.isCancelled()) return;
             int size = to - from;
             if (size <= LEAF) {
                 int item = sortedItems.get(from);
@@ -127,17 +138,24 @@ public class AlgoFJ {
                     Map<Integer, UPUList> lists,
                     TopKCollector collector,
                     double minProb,
-                    AtomicLong nodes,
-                    AtomicLong joins) {
-        nodes.incrementAndGet();
+                    LongAdder nodes,
+                    LongAdder joins) {
+        if (Cancel.isCancelled()) return;   // abandoned run: unwind
+        nodes.increment();
         if (prefix.ptwu < collector.getThreshold() - UPUList.EPSILON) return;
 
         for (int i = startIdx; i < items.size(); i++) {
+            // Checked here, not only on entry: a cancelled run must not keep
+            // paying for joins. Returning from the recursive call is not enough,
+            // because this loop would carry on building the remaining
+            // extensions of the current prefix, and a join is the single most
+            // expensive thing the miner does.
+            if (Cancel.isCancelled()) return;
             int extItem = items.get(i);
             UPUList ext = lists.get(extItem);
             if (ext == null) continue;
 
-            joins.incrementAndGet();
+            joins.increment();
             UPUList joined = UPUList.join(prefix, ext, extItem, collector.getThreshold());
             if (joined == null) continue;
 

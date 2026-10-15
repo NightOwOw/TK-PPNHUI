@@ -3,7 +3,7 @@ package ppnhui;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Producer-Consumer TK-PPNHUI.
@@ -21,6 +21,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *   - Handles uneven workloads better than static partitioning
  *
  * nodesExpanded and joinsAttempted count total work across all consumer threads.
+ *
+ * The producer and the consumers are daemon threads: when the harness abandons a
+ * run on timeout it cannot stop them, and as non-daemon threads they would keep
+ * the JVM alive after the sweep finished.
  */
 public class AlgoPC {
 
@@ -46,7 +50,7 @@ public class AlgoPC {
     private static final int POISON = -1;
 
     public static Result mine(List<Transaction> db, ProfitTable pt,
-                               int k, double minProb, int numThreads) {
+                               MiningTarget target, double minProb, int numThreads) {
         long t0 = System.currentTimeMillis();
 
         UPUList.BuildResult   pre         = UPUList.buildAll(db, pt, minProb);
@@ -54,7 +58,7 @@ public class AlgoPC {
 
         List<Integer>         sortedItems = pre.sortedItems;
         Map<Integer, UPUList> lists       = pre.lists;
-        TopKCollector         collector   = new TopKCollector(k);
+        TopKCollector         collector   = target.newCollector();
 
         for (int item : sortedItems) {
             UPUList ul = lists.get(item);
@@ -63,8 +67,8 @@ public class AlgoPC {
         long t2 = System.currentTimeMillis();
 
         BlockingQueue<Integer> queue = new ArrayBlockingQueue<>(sortedItems.size() + numThreads + 1);
-        AtomicLong nodes = new AtomicLong();
-        AtomicLong joins = new AtomicLong();
+        LongAdder nodes = new LongAdder();
+        LongAdder joins = new LongAdder();
 
         Thread producer = new Thread(() -> {
             for (int i = 0; i < sortedItems.size(); i++) {
@@ -73,13 +77,15 @@ public class AlgoPC {
             for (int t = 0; t < numThreads; t++) {
                 try { queue.put(POISON); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
             }
-        });
+        }, "pc-producer");
+        producer.setDaemon(true);
         producer.start();
 
         Thread[] consumers = new Thread[numThreads];
         for (int t = 0; t < numThreads; t++) {
             consumers[t] = new Thread(() -> {
                 while (true) {
+                    if (Cancel.isCancelled()) break;
                     int prefixIdx;
                     try { prefixIdx = queue.take(); } catch (InterruptedException e) { break; }
                     if (prefixIdx == POISON) break;
@@ -90,7 +96,8 @@ public class AlgoPC {
                         dfs(prefix, prefixIdx + 1, sortedItems, lists, collector, minProb, nodes, joins);
                     }
                 }
-            });
+            }, "pc-consumer-" + t);
+            consumers[t].setDaemon(true);
             consumers[t].start();
         }
 
@@ -104,7 +111,7 @@ public class AlgoPC {
         long t3 = System.currentTimeMillis();
         return new Result(collector.getTopK(),
             t3 - t0, t1 - t0, t2 - t1, t3 - t2,
-            nodes.get(), joins.get());
+            nodes.sum(), joins.sum());
     }
 
     private static void dfs(UPUList prefix, int startIdx,
@@ -112,17 +119,24 @@ public class AlgoPC {
                              Map<Integer, UPUList> lists,
                              TopKCollector collector,
                              double minProb,
-                             AtomicLong nodes,
-                             AtomicLong joins) {
-        nodes.incrementAndGet();
+                             LongAdder nodes,
+                             LongAdder joins) {
+        if (Cancel.isCancelled()) return;   // abandoned run: unwind
+        nodes.increment();
         if (prefix.ptwu < collector.getThreshold() - UPUList.EPSILON) return;
 
         for (int i = startIdx; i < items.size(); i++) {
+            // Checked here, not only on entry: a cancelled run must not keep
+            // paying for joins. Returning from the recursive call is not enough,
+            // because this loop would carry on building the remaining
+            // extensions of the current prefix, and a join is the single most
+            // expensive thing the miner does.
+            if (Cancel.isCancelled()) return;
             int extItem = items.get(i);
             UPUList ext = lists.get(extItem);
             if (ext == null) continue;
 
-            joins.incrementAndGet();
+            joins.increment();
             UPUList joined = UPUList.join(prefix, ext, extItem, collector.getThreshold());
             if (joined == null) continue;
 

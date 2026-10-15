@@ -1,9 +1,28 @@
 # Compiled bytecode
+out/
 bin_ppnhui/
 *.class
 
-# Experiment output (large, regeneratable)
+# Scratch regeneration of the datasets
+tmp_check/
+
+# analyze.py output (regenerable from the results directories)
+analysis*/
+
+# Superseded or exploratory results; they correspond to no reported number.
+# The four paper directories (results_final_light_v2, results_fix,
+# results_heavy_v2, results_kosarak_fill) and the base-case directories
+# (results_base*, results_cold_*, res_cold_*) are deliberately not listed.
 results/
+results_final/
+results_final_heavy/
+results_final_light/
+results_fj4/
+results_test/
+results_probe/
+res_check/
+res_test/
+res_probe*/
 
 # Dataset files (too large for GitHub — share separately)
 data/
@@ -14,3 +33,19 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Data and results live in the Zenodo deposit, not in git
+data_new/
+data_base/
+raw/
+logs/
+deposit/
+spmf/
+spmf.jar
+results_final_light_v2/
+results_fix/
+results_heavy_v2/
+results_kosarak_fill/
+results_base*/
+results_cold_*/
+res_cold_*/

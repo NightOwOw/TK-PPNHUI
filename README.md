@@ -1,220 +1,256 @@
-# TK-PPNHUI: Parallel Methods for Extracting Top-K Probabilistic Positive-Negative High-Utility Itemsets
+# TK-PPNHUI: reproduction package
 
-[![Language](https://img.shields.io/badge/Language-Java_8+-orange.svg)](https://www.java.com/)
-[![Status](https://img.shields.io/badge/Status-Research-green.svg)](README.md)
+This is the code, data and raw measurements behind the experimental section of
+the TK-PPNHUI paper (parallel top-k probabilistic positive/negative high-utility
+itemset mining). It lets you:
 
-> Research implementation comparing **five parallel strategies** for top-k high-utility itemset mining on uncertain transaction databases with **positive and negative profit** items.
+1. regenerate the paper's result tables and figures from the shipped
+   measurements in under a minute, without re-running any experiment, and
+2. re-run the experiments themselves (this takes many hours).
 
----
+Paths below are relative to the root of the deposit. If you are reading this in
+the authors' working folder rather than the deposit, see
+[Working-folder paths](#working-folder-paths) at the end.
 
-## Problem
+## Contents
 
-Given an uncertain transaction database where each item has an existential probability and a profit (which may be **negative**), find the **top-k itemsets** ranked by Expected Utility (EU) subject to a minimum Existential Probability (EP) constraint.
+| Path | What it is |
+|---|---|
+| `src/` | Java sources of the miner and the experiment harness (package `ppnhui`) |
+| `src/unused/` | Exploratory sources not used by any reported result (see below) |
+| `scripts/` | `generate_dataset.py`, `make_stats.py`, `analyze.py`, `to_spmf.py`, `compare_spmf.py` |
+| `raw/` | Raw SPMF transaction files the benchmark datasets are built from |
+| `data/` | The nine benchmark datasets (`<name>_database.txt`, `<name>_profit.txt`, `<name>_stats.json`) |
+| `data_base/` | Base-case datasets (all profits positive, all probabilities 1) for Section 6.5 |
+| `results/` | The four measurement directories behind the main results |
+| `results_basecase/` | Measurement directories behind Section 6.5 (base case vs EFIM) |
+| `analysis/` | Tables, figures and validation report produced by `analyze.py` from `results/` |
 
-This extends classic probabilistic HUIM (PHUIM) by allowing negative-profit items to appear in discovered patterns — expanding the search space and making parallelization more critical.
+## Measurement environment
 
-**Key metrics:**
-- **EU(X)** = Σ u(X,T) × P(X,T) — expected profit, can be negative
-- **EP(X)** = 1 − Π(1 − P(X,T)) — probability X appears in at least one transaction
-- **PTWU(X)** — upper bound using only positive-profit utilities (valid even for negative items)
-- **PUB(X)** — tighter suffix-sum upper bound
+All reported times were taken on:
 
----
+* **JDK:** OpenJDK 25 (Eclipse Temurin 25.0.4.1+1 LTS), HotSpot 64-bit Server VM.
+  The run logs report `JVM 25.0.4.1 (OpenJDK 64-Bit Server VM)`.
+* **CPU:** Intel Core i7-12700H (14 cores / 20 hardware threads; the JVM
+  reports 20 processors)
+* **Memory:** 16 GB. The JVM ran with its default heap; the logs report a
+  maximum heap of 4024 MB, and no `-Xmx` was given.
+* **OS:** Windows 11, amd64
 
-## Algorithms
+Thread counts 1, 2, 4 and 8 were measured for every parallel strategy.
+Absolute times on other hardware will differ. Speedups and work ratios are
+the quantities the paper compares.
 
-Five methods are implemented and compared:
+Analysis needs Python 3 with `matplotlib`. The regeneration check below was
+done with Python 3.14.3 and matplotlib 3.11.1.
 
-| ID | Name | Strategy | Threshold Sharing |
-|----|------|----------|-------------------|
-| SEQ | Sequential | Single-thread DFS | Full (sequential) |
-| FJ | ForkJoin Work-Stealing | `ForkJoinPool` + `RecursiveAction` | Shared (all threads) |
-| TPB | ThreadPool PTWU-Balanced | Fixed pool + PTWU round-robin partition | Shared (all threads) |
-| PLM | Parallel Local Mining + Merge | Fixed pool + thread-local collectors | None (merge at end) |
-| PC | Producer-Consumer | `BlockingQueue` + N consumers | Shared (all threads) |
+## 1. Build
 
-All algorithms use the same three-tier pruning: **EP → PTWU → PUB** (cheapest check first).
-
----
-
-## Project Structure
-
-```
-TK-PPNHUI/
-├── ppnhui/
-│   ├── Transaction.java        — data model: tid, items[], qtys[], probs[]
-│   ├── ProfitTable.java        — item → profit (positive or negative)
-│   ├── DataReader.java         — file parser: item:qty:prob format
-│   ├── UPUList.java            — UPU-List data structure + buildAll() + join()
-│   ├── TopKCollector.java      — thread-safe min-heap top-k collector
-│   ├── AlgoSEQ.java            — [1] Sequential baseline
-│   ├── AlgoFJ.java             — [2] ForkJoin work-stealing
-│   ├── AlgoTPB.java            — [3] ThreadPool PTWU-balanced
-│   ├── AlgoPLM.java            — [4] Parallel local mining + merge
-│   ├── AlgoPC.java             — [5] Producer-Consumer
-│   └── Experiment.java         — main() — runs all algorithms, writes results
-├── data/                       — dataset files (not tracked in git, see below)
-├── results/                    — output directory (auto-created on run)
-├── sn-article-template/        — Springer Nature LaTeX template
-├── CONTEXT.md                  — full technical context for this project
-└── .gitignore
-```
-
----
-
-## How to Run
-
-**Requirements:** Java 8 or higher. No build tools needed.
-
-### Step 1 — Compile
-
-In PowerShell from the project root:
-
-```powershell
-javac -d bin_ppnhui (Get-ChildItem ppnhui\*.java).FullName
-```
-
-Or with bash:
+From the deposit root, with JDK 25 on the `PATH`:
 
 ```bash
-mkdir -p bin_ppnhui && javac -d bin_ppnhui ppnhui/*.java
+javac -d out src/*.java
 ```
 
-### Step 2 — Configure
-
-Edit `ppnhui/Experiment.java` to select datasets and parameters:
-
-```java
-static final String[][] DATASETS = {
-    {"Chess", "data/chess_database.txt", "data/chess_profit.txt"},
-    // {"Mushroom", "data/mushroom_database.txt", "data/mushroom_profit.txt"},
-};
-
-static final int[]    K_VALUES      = {50, 60, 70, 80, 90};
-static final double[] MIN_PROBS     = {0.7};
-static final int[]    THREAD_COUNTS = {2, 4, 8};
-static final int      RUNS          = 3;   // median of 3 runs reported
-```
-
-### Step 3 — Run
-
-**In VS Code / IntelliJ:** Click **Run** above `main()` in `Experiment.java`.
-
-**In PowerShell:**
+On Windows PowerShell:
 
 ```powershell
-java -cp bin_ppnhui ppnhui.Experiment
+javac -d out (Get-ChildItem src\*.java).FullName
 ```
 
----
+This compiles the 14 sources in `src/` into `out/ppnhui/`. The files in
+`src/unused/` are deliberately left out.
 
-## Output
+> **Do not use `bin_ppnhui/`** if you find one in the authors' working folder.
+> It is a stale build from before `AlgoSEQREV` existed and does not match the
+> sources that produced the results. Always build into `out/` as above.
 
-### Console — two tables per (k, minProb) block
+## 2. Regenerate the tables and figures from the shipped measurements
 
-**Timing table:**
-```
-================================================================
- Dataset: Chess  |  3196 transactions
-================================================================
+The paper's numbers come from four measurement directories, merged in this
+order. A later directory replaces an earlier one for the same
+(dataset, algorithm, k, minProb, threads) cell. The command as it was run in
+the working folder:
 
-  k=50  minProb=0.70
-  +-----------+---------+-------------+---------+----------+
-  | Algorithm | Threads |    Time(ms) | Speedup | Patterns |
-  +-----------+---------+-------------+---------+----------+
-  | SEQ       |       1 |     177,349 |   1.00x |       50 |
-  | FJ        |       2 |      11,369 |  15.60x |       50 |
-  | FJ        |       4 |       8,516 |  20.85x |       50 |
-  | FJ        |       8 |       2,727 |  65.03x |       50 |
-  | TPB       |       2 |     129,473 |   1.37x |       50 |
-  | TPB       |       4 |     102,421 |   1.73x |       50 |
-  | TPB       |       8 |      15,814 |  11.21x |       50 |
-  | PLM       |       2 |     200,778 |   0.88x |       50 |
-  | PLM       |       4 |     220,819 |   0.80x |       50 |
-  | PLM       |       8 |     108,311 |   1.64x |       50 |
-  | PC        |       2 |     115,586 |   1.53x |       50 |
-  | PC        |       4 |      47,736 |   3.71x |       50 |
-  | PC        |       8 |      15,661 |  11.33x |       50 |
-  +-----------+---------+-------------+---------+----------+
+```bash
+python analyze.py --results results_final_light_v2 results_fix \
+    results_heavy_v2 results_kosarak_fill --stats data_new --out analysis2
 ```
 
-**Work metrics table** (printed immediately after timing table):
-```
-  Work metrics (total across all threads; Work Ratio = joins / SEQ joins):
-  +-----------+---------+--------------------+--------------------+-----------+
-  | Algorithm | Threads |     Nodes Expanded |     Joins Attempted| Work Ratio|
-  +-----------+---------+--------------------+--------------------+-----------+
-  | SEQ       |       1 |      1,234,567,890 |        987,654,321 |     1.000 |
-  | FJ        |       8 |         61,728,394 |         49,382,716 |     0.050 |
-  | PLM       |       8 |      2,469,135,780 |      1,975,308,642 |     2.000 |
-  ...
-  +-----------+---------+--------------------+--------------------+-----------+
-```
-Work Ratio < 1/threads confirms super-linear speedup via cooperative threshold escalation (FJ).
-Work Ratio > 1 shows extra work from isolated thresholds (PLM).
+The same command in the deposit layout:
 
-### Files — written to `results/<DatasetName>/`
-
-Each dataset gets its own subfolder:
-
-```
-results/
-├── Chess/
-│   ├── performance.csv
-│   ├── patterns_Chess_SEQ_k10_p0.70_t1.txt
-│   ├── patterns_Chess_FJ_k10_p0.70_t2.txt
-│   └── ...
-├── Mushroom/
-│   ├── performance.csv
-│   └── ...
+```bash
+python scripts/analyze.py --results results/results_final_light_v2 results/results_fix \
+    results/results_heavy_v2 results/results_kosarak_fill --stats data --out analysis_regen
 ```
 
-- `performance.csv` — timing + work metrics for every (algorithm, k, minProb, threads, run); columns include `nodesExpanded` and `joinsAttempted`
-- `patterns_<dataset>_<algo>_k<k>_p<minProb>_t<threads>.txt` — actual top-k patterns with EU and EP values
+Running this on the shipped measurements reproduces `analysis/` exactly:
+`report.txt` and all five `.tex` tables are byte-identical, and the four
+figure PDFs differ only in their embedded creation timestamp.
 
----
+What each directory contributes:
 
-## Data Format
+| Dataset | k values | Source directory |
+|---|---|---|
+| Chess | 10, 20, 50 | `results_final_light_v2` |
+| Chess | 30, 40 | `results_fix` (replaces the earlier rows) |
+| Mushroom, c20d10k, Liquor, T10I4D100K, t25i10d10k | all | `results_final_light_v2` |
+| Accidents, Retail | all | `results_heavy_v2` |
+| Kosarak | 25 | `results_fix` |
+| Kosarak | 10, 15, 20, 30 | `results_kosarak_fill` |
 
-**Database file** — one transaction per line, items as `item:qty:prob`:
+### Which file is which table or figure
+
+| Paper | LaTeX label | File under `analysis/` |
+|---|---|---|
+| Table [CONFIRM] | `tab:datasets` | `tables/table_datasets.tex` |
+| Table [CONFIRM] | `tab:parameters` | `tables/table_parameters.tex` |
+| Table [CONFIRM] | `tab:main` | `tables/table_main.tex` |
+| Table [CONFIRM] | `tab:scaling` | `tables/table_scaling.tex` |
+| Table [CONFIRM] | `tab:traversal` | `tables/table_traversal.tex` |
+| Figure [CONFIRM] | – | `figures/fig_scaling.pdf` (speedup vs threads) |
+| Figure [CONFIRM] | – | `figures/fig_workratio.pdf` (work ratio vs threads) |
+| Figure [CONFIRM] | – | `figures/fig_speedup_vs_k.pdf` (speedup at 8 threads vs k) |
+| Figure [CONFIRM] | – | `figures/fig_traversal.pdf` (SEQ-REV vs SEQ) |
+| – | – | `report.txt` (validation report; not in the paper) |
+
+## 3. Re-run the experiments
+
+Each command writes `<out>/<Dataset>/summary.csv`, `performance.csv` and,
+unless `--no-patterns` is given, one `patterns_*.txt` per configuration.
+Each sweep takes hours. Before any timed run the harness performs `--warmup`
+discarded repetitions per configuration. Every row is checked against the
+sequential baseline (`matchesSEQ` column).
+
+Options not shown were left at the harness defaults: `--threads 1,2,4,8`,
+`--minprob 0.7`, all six algorithms, and the per-dataset k values in
+`Experiment.DEFAULT_K`. Where an option's original value was not recorded, the
+note under the command says so.
+
+**`results_final_light_v2`**
+
+```bash
+java -cp out ppnhui.Experiment --data-dir data --out results/results_final_light_v2 \
+    --datasets Chess,Mushroom,c20d10k,t25i10d10k,T10I4D100K,Liquor --runs 5
 ```
-56:1:1.0 8:1:1.0 18:1:1.0 12:1:1.0 45:1:1.0
-49:1:1.0 16:1:1.0 18:1:1.0 24:1:0.8 6:1:1.0
+
+* `--runs 5` is recorded. **The warm-up count was not recorded.** The line
+  as written uses the harness default of 2, but it is not known whether the
+  original run used 2.
+* The timeout was not recorded. The harness default is 900 s, and no row
+  timed out, so the value did not affect any reported number.
+* This directory has no `patterns_*.txt` files.
+* Its `summary.csv` lacks the trailing `mode`/`minUtil` columns, so it was
+  written by an earlier revision of `Experiment.java` than the one shipped,
+  before min-util mode was added. `analyze.py` reads both layouts and treats
+  files without a `mode` column as top-k.
+
+**`results_fix`** (two invocations, because `--k` applies to every dataset in
+a run)
+
+```bash
+java -cp out ppnhui.Experiment --data-dir data --out results/results_fix \
+    --datasets Chess --k 30,40 --runs 5
+java -cp out ppnhui.Experiment --data-dir data --out results/results_fix \
+    --datasets Kosarak --k 25 --runs 5
 ```
 
-**Profit file** — one item per line, profit may be negative:
+* `--runs 5` is recorded. **The warm-up count was not recorded**, as above.
+* The timeout was not recorded and no row timed out.
+* There are no pattern files, and the earlier `summary.csv` layout applies,
+  as above.
+
+**`results_heavy_v2`**
+
+```bash
+java -cp out ppnhui.Experiment --data-dir data --out results/results_heavy_v2 \
+    --datasets Retail,Accidents --runs 3 --warmup 1
 ```
-1  3.5
-2  5.52
-5 -4.83
-6  9.38
+
+* The timeout was not recorded and no row timed out.
+* The dataset order is inferred from file timestamps: Retail finished
+  first. Results do not depend on it.
+
+**`results_kosarak_fill`**
+
+```bash
+java -cp out ppnhui.Experiment --data-dir data --out results/results_kosarak_fill \
+    --datasets Kosarak --k 10,15,20,30 --runs 5 --warmup 2 --timeout 1800
 ```
 
-### Datasets
+* The run log header confirms `runs=5 warmup=2 timeout=1800s threads=[1, 2, 4, 8]`.
 
-Dataset files are **not included in this repository** (total size > 600 MB). Place them in the `data/` folder:
+## 4. Rebuild the datasets
 
-| Dataset | Transactions | Items | Avg Len | Available |
-|---------|-------------|-------|---------|-----------|
-| Chess | 3,196 | 75 | 37.0 | Yes |
-| Mushroom | 8,124 | 119 | 23.0 | Yes |
-| Retail | 88,162 | 16,470 | 10.3 | Yes |
-| Liquor | 52,131 | 4,026 | 7.87 | Yes (converted) |
+`data/` already contains the exact files that were measured. Rebuilding is
+only needed to check the generation protocol. Eight of the nine datasets were
+generated from `raw/` with fixed seeds, as run in the working folder:
 
-The Liquor dataset was derived from the [SPMF public datasets](https://www.philippe-fournier-viger.com/spmf/index.php?link=datasets.php) by merging `liquor_11.txt` (HUIM utilities) and `liquor_11frequent_uncertain.txt` (existential probabilities). Run `python convert_liquor.py` from the project root to regenerate it.
+```bash
+for spec in Chess:chess Mushroom:mushroom c20d10k:c20d10k Accidents:accidents \
+            t25i10d10k:t25i10d10k T10I4D100K:T10I4D100K Retail:retail Kosarak:kosarak; do
+  name=${spec%%:*}; raw=${spec#*:}
+  python generate_dataset.py --name "$name" --input "raw/$raw.txt" \
+      --profit-ref data/chess_profit.txt data/mushroom_profit.txt data/retail_profit.txt \
+      --outdir data_new --seed 42
+done
+```
 
----
+* `--profit-ref` points at the **original** Chess, Mushroom and Retail
+  profit tables, from the working folder's `data/` directory. These are not
+  the files of the same name in this deposit's `data/`, which are the
+  regenerated benchmark versions. The generator only uses the reference
+  files for the empirical distribution of profit magnitudes.
+* **`raw/kosarak.txt` and `raw/accidents.txt` are already subsets:** the
+  100,000- and 20,000-transaction subsets respectively, not the full SPMF
+  files.
+  The deposit ships them for this reason. Starting from the full public files
+  would give different datasets.
+* A regeneration on 15 Oct 2026 was byte-identical to `data/` for all eight
+  datasets.
+* **Liquor is not generated by this script.** It was converted earlier from
+  SPMF's `liquor_11` utility and uncertain versions, with the 30% of items of
+  lowest total utility made negative. It is shipped as measured. Its
+  `liquor_stats.json` describes the shipped files and can be re-derived from
+  them with `scripts/make_stats.py --data-dir data --name Liquor --force`.
 
-## Key Findings (Chess dataset, minProb=0.70)
+The base-case datasets in `data_base/` use the same generator with
+`--neg-fraction 0 --prob-mode certain` (see the docstring of
+`generate_dataset.py`). Only RetailBase and T10Base enter Section 6.5;
+ChessBase was probed but every run timed out.
 
-- **FJ** achieves super-linear speedup (up to 65× at 8 threads) due to *cooperative threshold escalation*: parallel threads collectively discover high-EU patterns faster, raising the pruning threshold much higher than sequential DFS can alone.
-- **PC** and **TPB** converge around 11× at 8 threads — dynamic vs. static task scheduling has diminishing returns at the coarse 1-itemset granularity.
-- **PLM** is *slower than sequential* at 2–4 threads — each thread's local collector cannot benefit from other threads' discoveries, so the threshold rises slowly and far more nodes are explored. This is especially severe for PPNHUI because negative-profit items expand the search space.
-- **TPB** improves moderately — PTWU-based static partitioning cannot react to runtime imbalance on Chess's dense structure.
+## 5. Section 6.5: base case vs EFIM
 
----
+`results_basecase/` holds the min-util-mode runs of the shipped miner on the
+base-case datasets:
 
-## Authors
+* `results_base/` (RetailBase) and `results_base_t10/` (T10Base): SEQ,
+  SEQ-REV, PC and PLM at five minUtil thresholds each, 5 runs.
+* `results_base_retail_cold/`, `results_base_t10_cold/`,
+  `results_cold_retail_r{1,2,3}/`, `results_cold_t10_r{1,2,3}/` and
+  `res_cold_<minUtil>/`: SEQ-only cold-start runs (1 or 3 repetitions).
 
-Research implementation for thesis project — HCMUT, 2024–2025.
-Target journal: Springer Nature (manuscript in preparation).
+The independent reference is EFIM from the SPMF library. `scripts/to_spmf.py`
+converts a base-case dataset into SPMF's utility format and checks that the
+conversion is lossless. `scripts/compare_spmf.py` checks that EFIM and our
+miner return the same itemsets with the same utilities.
+
+## Unused sources
+
+`src/unused/AlgoFHN.java`, `AlgoPFHN.java`, `EUCS.java` and `TestFHN.java` are
+exploratory and unused: nothing reachable from `Experiment.java` references
+them, and they correspond to no reported result.
+
+## Working-folder paths
+
+In the authors' working folder, the deposit paths correspond to:
+
+| Deposit | Working folder |
+|---|---|
+| `src/*.java` | `ppnhui/*.java` |
+| `scripts/*.py` | `*.py` at the top level |
+| `data/` | `data_new/` |
+| `results/<dir>` | `<dir>` at the top level |
+| `results_basecase/<dir>` | `<dir>` at the top level |
+| `analysis/` | `analysis2/` |
