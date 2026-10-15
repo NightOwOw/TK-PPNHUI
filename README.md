@@ -5,8 +5,10 @@ the TK-PPNHUI paper (parallel top-k probabilistic positive/negative high-utility
 itemset mining). It lets you:
 
 1. regenerate the paper's result tables and figures from the shipped
-   measurements in under a minute, without re-running any experiment, and
-2. re-run the experiments themselves (this takes many hours).
+   measurements in under a minute, without re-running any experiment,
+2. rebuild every dataset from its raw source and check it against the shipped
+   files, and
+3. re-run the experiments themselves (this takes many hours).
 
 Paths below are relative to the root of the deposit. If you are reading this in
 the authors' working folder rather than the deposit, see
@@ -18,12 +20,14 @@ the authors' working folder rather than the deposit, see
 |---|---|
 | `src/` | Java sources of the miner and the experiment harness (package `ppnhui`) |
 | `src/unused/` | Exploratory sources not used by any reported result (see below) |
-| `scripts/` | `generate_dataset.py`, `make_stats.py`, `analyze.py`, `to_spmf.py`, `compare_spmf.py` |
-| `raw/` | Raw SPMF transaction files the benchmark datasets are built from |
-| `data/` | The nine benchmark datasets (`<name>_database.txt`, `<name>_profit.txt`, `<name>_stats.json`) |
+| `scripts/` | `generate_dataset.py`, `convert_liquor.py`, `make_stats.py`, `analyze.py`, `to_spmf.py`, `compare_spmf.py` |
+| `raw/` | Raw SPMF transaction files the generated datasets are built from |
+| `profit_ref/` | The three reference profit tables `generate_dataset.py` samples profit magnitudes from |
+| `data/` | The nine benchmark datasets plus Pumsb (`<name>_database.txt`, `<name>_profit.txt`, `<name>_stats.json`) |
 | `data_base/` | Base-case datasets (all profits positive, all probabilities 1) for Section 6.5 |
+| `spmf/` | The base-case datasets converted to SPMF's utility format, as given to EFIM |
 | `results/` | The four measurement directories behind the main results |
-| `results_basecase/` | Measurement directories behind Section 6.5 (base case vs EFIM) |
+| `results_basecase/` | Measurement directories behind Section 6.5, and EFIM's outputs in `efim/` |
 | `analysis/` | Tables, figures and validation report produced by `analyze.py` from `results/` |
 
 ## Measurement environment
@@ -42,7 +46,7 @@ Thread counts 1, 2, 4 and 8 were measured for every parallel strategy.
 Absolute times on other hardware will differ. Speedups and work ratios are
 the quantities the paper compares.
 
-Analysis needs Python 3 with `matplotlib`. The regeneration check below was
+Analysis needs Python 3 with `matplotlib`. The regeneration checks below were
 done with Python 3.14.3 and matplotlib 3.11.1.
 
 ## 1. Build
@@ -102,18 +106,21 @@ What each directory contributes:
 
 ### Which file is which table or figure
 
-| Paper | LaTeX label | File under `analysis/` |
+| Paper | Label | Source |
 |---|---|---|
-| Table [CONFIRM] | `tab:datasets` | `tables/table_datasets.tex` |
-| Table [CONFIRM] | `tab:parameters` | `tables/table_parameters.tex` |
-| Table [CONFIRM] | `tab:main` | `tables/table_main.tex` |
-| Table [CONFIRM] | `tab:scaling` | `tables/table_scaling.tex` |
-| Table [CONFIRM] | `tab:traversal` | `tables/table_traversal.tex` |
-| Figure [CONFIRM] | – | `figures/fig_scaling.pdf` (speedup vs threads) |
-| Figure [CONFIRM] | – | `figures/fig_workratio.pdf` (work ratio vs threads) |
-| Figure [CONFIRM] | – | `figures/fig_speedup_vs_k.pdf` (speedup at 8 threads vs k) |
-| Figure [CONFIRM] | – | `figures/fig_traversal.pdf` (SEQ-REV vs SEQ) |
-| – | – | `report.txt` (validation report; not in the paper) |
+| Table 4 | `tab:datasets` | `analysis/tables/table_datasets.tex` |
+| Table 5 | `tab:parameters` | `analysis/tables/table_parameters.tex` |
+| Table 6 | `tab:scaling` | `analysis/tables/table_scaling.tex`, verbatim |
+| Table 7 | `tab:order` | Assembled from three generated tables: columns 2–3 from `table_traversal.tex` ("Implied speedup" is the reciprocal of its "Time vs SEQ"), column 4 from the FJ 1-thread column of `table_scaling.tex`, column 5 from the FJ work ratio in `table_main.tex` |
+| Table 8 | `tab:sharing` | Assembled: density from `table_datasets.tex`; TPB and PLM work ratios from `table_main.tex`; "Saving" is PLM ÷ TPB |
+| Table 9 | `tab:main` | `analysis/tables/table_main.tex`, verbatim |
+| Table 10 | `tab:basecase` | Section 6.5; see [below](#5-section-65-base-case-vs-efim) |
+| Figure 4 | `fig:scaling` | `analysis/figures/fig_scaling.pdf` |
+| Figure 5 | `fig:workratio` | `analysis/figures/fig_workratio.pdf` |
+| Figure 6 | `fig:traversal` | `analysis/figures/fig_traversal.pdf` |
+
+`analysis/figures/fig_speedup_vs_k.pdf` and `analysis/report.txt` (the
+validation report) are produced by the same run but are not in the paper.
 
 ## 3. Re-run the experiments
 
@@ -184,57 +191,110 @@ java -cp out ppnhui.Experiment --data-dir data --out results/results_kosarak_fil
 ## 4. Rebuild the datasets
 
 `data/` already contains the exact files that were measured. Rebuilding is
-only needed to check the generation protocol. Eight of the nine datasets were
-generated from `raw/` with fixed seeds, as run in the working folder:
+only needed to check where they came from.
+
+### Generated datasets
+
+Eight of the nine benchmark datasets, plus Pumsb, are generated from `raw/`
+with a fixed seed. From the deposit root:
 
 ```bash
 for spec in Chess:chess Mushroom:mushroom c20d10k:c20d10k Accidents:accidents \
-            t25i10d10k:t25i10d10k T10I4D100K:T10I4D100K Retail:retail Kosarak:kosarak; do
+            t25i10d10k:t25i10d10k T10I4D100K:T10I4D100K Retail:retail Kosarak:kosarak \
+            Pumsb:pumsb; do
   name=${spec%%:*}; raw=${spec#*:}
-  python generate_dataset.py --name "$name" --input "raw/$raw.txt" \
-      --profit-ref data/chess_profit.txt data/mushroom_profit.txt data/retail_profit.txt \
-      --outdir data_new --seed 42
+  python scripts/generate_dataset.py --name "$name" --input "raw/$raw.txt" \
+      --profit-ref profit_ref/chess_profit.txt profit_ref/mushroom_profit.txt \
+                   profit_ref/retail_profit.txt \
+      --outdir data_regen --seed 42
 done
 ```
 
-* `--profit-ref` points at the **original** Chess, Mushroom and Retail
-  profit tables, from the working folder's `data/` directory. These are not
-  the files of the same name in this deposit's `data/`, which are the
-  regenerated benchmark versions. The generator only uses the reference
-  files for the empirical distribution of profit magnitudes.
-* **`raw/kosarak.txt` and `raw/accidents.txt` are already subsets:** the
-  100,000- and 20,000-transaction subsets respectively, not the full SPMF
-  files.
-  The deposit ships them for this reason. Starting from the full public files
-  would give different datasets.
-* A regeneration on 15 Oct 2026 was byte-identical to `data/` for all eight
-  datasets.
-* **Liquor is not generated by this script.** It was converted earlier from
-  SPMF's `liquor_11` utility and uncertain versions, with the 30% of items of
-  lowest total utility made negative. It is shipped as measured. Its
-  `liquor_stats.json` describes the shipped files and can be re-derived from
-  them with `scripts/make_stats.py --data-dir data --name Liquor --force`.
+* The output is byte-identical to `data/` for all nine.
+* **`--profit-ref` must point at `profit_ref/`, not `data/`.** The
+  `*_profit.txt` files in `data/` are the generated benchmark tables. The ones
+  in `profit_ref/` are the original Chess, Mushroom and Retail profit tables,
+  which the generator samples profit magnitudes from.
+* **Some raw files are already subsets.** `raw/kosarak.txt` has 100,000
+  transactions, `raw/accidents.txt` has 20,000, and `raw/pumsb.txt` has
+  15,000. Starting from the full public files would give different datasets.
 
-The base-case datasets in `data_base/` use the same generator with
-`--neg-fraction 0 --prob-mode certain` (see the docstring of
-`generate_dataset.py`). Only RetailBase and T10Base enter Section 6.5;
-ChessBase was probed but every run timed out.
+### Liquor
+
+Liquor is the one dataset with real quantities, probabilities and utilities.
+It is not generated: `scripts/convert_liquor.py` converts it from SPMF's
+Liquor utility dataset and its uncertain version. The 30% of items with the
+lowest average utility are given negative profits, and every quantity is 1.
+The script expects its two inputs in `data/` and writes into `data/`, so run
+it in a scratch directory:
+
+```bash
+mkdir -p liquor_regen/data
+# put the two SPMF files here (names as the script expects them):
+#   liquor_regen/data/liquor_11.txt                     sha256 349407998330c9297fcb36f170b5ac0b97bbfc9f745e00b6182e4e7b728db69b
+#   liquor_regen/data/liquor_11frequent_uncertain.txt   sha256 808df56957d184ef998c5cca53882a9384e695182670ce89488ee790c5d507f2
+cd liquor_regen && python ../scripts/convert_liquor.py
+```
+
+With these inputs the output is byte-identical to `data/liquor_database.txt`
+and `data/liquor_profit.txt`. `data/liquor_stats.json` describes the shipped
+files and can be re-derived with
+`scripts/make_stats.py --data-dir data --name Liquor --force`.
+
+### Pumsb
+
+The paper reports that no strategy finishes Pumsb within 600 s at k = 10,
+and that sampling it to 30% of its transactions does not help.
+`data/pumsb_*` is that 30% sample: 15,000 of Pumsb's 49,046 transactions,
+generated as above from `raw/pumsb.txt`.
+
+### Base-case datasets
+
+`data_base/` uses the same generator with `--neg-fraction 0
+--prob-mode certain` (see the docstring of `generate_dataset.py`). Only
+RetailBase and T10Base enter Section 6.5. ChessBase was probed but every run
+timed out.
 
 ## 5. Section 6.5: base case vs EFIM
 
-`results_basecase/` holds the min-util-mode runs of the shipped miner on the
+### Our miner
+
+`results_basecase/` holds min-util-mode runs of the shipped miner on the
 base-case datasets:
 
+* `results_cold_retail_r{1,2,3}/` and `results_cold_t10_r{1,2,3}/`: three
+  separate invocations of SEQ at each threshold. **The "Ours (ms)" column of
+  Table 10 is the median of r1–r3**, and |H| is their `patternsFound`.
 * `results_base/` (RetailBase) and `results_base_t10/` (T10Base): SEQ,
-  SEQ-REV, PC and PLM at five minUtil thresholds each, 5 runs.
-* `results_base_retail_cold/`, `results_base_t10_cold/`,
-  `results_cold_retail_r{1,2,3}/`, `results_cold_t10_r{1,2,3}/` and
-  `res_cold_<minUtil>/`: SEQ-only cold-start runs (1 or 3 repetitions).
+  SEQ-REV, PC and PLM at {1, 2, 4, 8} threads, 5 runs each. These are the
+  source of the statement that every work ratio in fixed-threshold mode is
+  exactly 1.000.
+* `results_base_retail_cold/`, `results_base_t10_cold/` and
+  `res_cold_<minUtil>/`: further SEQ cold-start runs, not used in Table 10.
 
-The independent reference is EFIM from the SPMF library. `scripts/to_spmf.py`
-converts a base-case dataset into SPMF's utility format and checks that the
-conversion is lossless. `scripts/compare_spmf.py` checks that EFIM and our
-miner return the same itemsets with the same utilities.
+### EFIM
+
+EFIM is run from SPMF, which is not redistributed here. Cite it as:
+
+> P. Fournier-Viger et al., *SPMF: an open-source data mining library*,
+> version 97. Download: https://www.philippe-fournier-viger.com/spmf/index.php?link=download.php
+
+The `spmf/*.txt` inputs were produced by `scripts/to_spmf.py`, which checks
+that the conversion is lossless. EFIM was run as:
+
+```bash
+java -jar spmf.jar run EFIM <in> <out> <minUtil>
+# e.g. java -jar spmf.jar run EFIM spmf/retailbase.txt efim_33000_1.txt 33000
+```
+
+Its outputs are in `results_basecase/efim/`:
+
+* `efim_<minUtil>[_r].txt` are for RetailBase.
+* `efim_t10_<minUtil>_<r>.txt` are for T10Base.
+* The suffixes `_1`, `_2` and `_3` are the three invocations.
+
+`scripts/compare_spmf.py` compares an EFIM output with one of our pattern
+files itemset by itemset.
 
 ## Unused sources
 
@@ -250,7 +310,9 @@ In the authors' working folder, the deposit paths correspond to:
 |---|---|
 | `src/*.java` | `ppnhui/*.java` |
 | `scripts/*.py` | `*.py` at the top level |
+| `profit_ref/*_profit.txt` | `data/*_profit.txt` |
 | `data/` | `data_new/` |
 | `results/<dir>` | `<dir>` at the top level |
 | `results_basecase/<dir>` | `<dir>` at the top level |
+| `results_basecase/efim/` | `efim_*.txt` at the top level |
 | `analysis/` | `analysis2/` |

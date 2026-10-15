@@ -1039,10 +1039,11 @@ short transactions.
 Two of the nine files are subsets. Kosarak is used as $100{,}000$ of its
 $990{,}002$ transactions and Accidents as $20{,}000$ of its $340{,}183$,
 because the full files exceed our time budget at the smallest $\Kk$.
-Sampling reduces the cost of these two proportionally: on Accidents,
-reducing the transaction count by a factor of $2.5$ reduced the
-sequential running time by a factor of $2.7$, so the subset preserves the
-shape of the problem rather than changing it.
+Sampling reduces the cost of these two proportionally rather than
+changing the shape of the problem: on Accidents, going from
+$50{,}000$ to $20{,}000$ transactions---a factor of $2.5$---reduced the
+sequential running time by a factor of $2.7$, so the cost is close to
+linear in the transaction count over the range we sampled.
  
 A tenth dataset, Pumsb ($49{,}046$ transactions, $2{,}113$ items, mean
 transaction length $74$), was probed and is reported here as not
@@ -1220,9 +1221,13 @@ Section~\ref{sec:discussion}.
 \FloatBarrier
 \section{Results}\label{sec:results}
  
-Every configuration returned the same top-$\Kk$ set as SEQ: across
-$765$ completed runs, each compared with its sequential reference by
-itemset and by $\EU$ to six decimals, there was no disagreement. The
+Every configuration returned the same top-$\Kk$ set as SEQ. Of the
+$810$ measured configurations, $45$ are the sequential baseline cells
+themselves; each of the remaining $765$---the four parallel strategies
+at four thread counts and the reverse-order control---was compared with
+the SEQ cell of its own $(\text{dataset},\Kk)$ by itemset and by $\EU$
+to six decimals, and no disagreement occurred. No configuration in the
+nine-dataset suite exceeded the timeout. The
 strategies therefore differ only in how long they take and how much of
 the search tree they visit, which is what the rest of this section
 examines.
@@ -1300,11 +1305,26 @@ t25i10d10k & Fork/Join & 1.04 & 2.09 & 3.22 & 5.65 \\
 \end{tabular}
 \end{table}
  
-Three observations follow immediately. First, \emph{no configuration is
-super-linear}: the largest speedup anywhere is $7.17\times$ on eight
-threads (FJ on Chess), and the median over the $36$ strategy--dataset pairs at eight threads is $3.4\times$. A previous version of this work reported a
-super-linear figure; Section~\ref{subsec:order} explains where that came
-from and why the present measurements do not reproduce it.
+Three observations follow immediately. First, super-linear speedups do
+occur, and they are confined to one strategy and explained by something
+other than parallelism. Fork--join on Chess at $\Kk=50$ reaches
+$9.11\times$ on eight threads. The same cell reaches $2.50\times$ on
+\emph{one} thread, where there is no parallelism to credit it to:
+measured against its own one-thread time, FJ is $1.86\times$,
+$2.25\times$ and $3.64\times$ on two, four and eight threads---
+sub-linear throughout. The $9.11\times$ is the product of a
+$2.50\times$ enumeration-order advantage, available to a purely
+sequential miner, and a $3.64\times$ parallel speedup. Across the whole
+grid, eleven cells exceed their thread count by more than a quarter;
+every one of them is a fork--join cell on Chess, Accidents or
+T10I4D100K, the three datasets where the reversed enumeration order
+reduces the work (Table~\ref{tab:order}). No other strategy exceeds its
+thread count by more than a quarter anywhere, and the median over the
+$36$ strategy--dataset pairs at eight threads is $3.4\times$. A previous
+version of this work reported a super-linear speedup as a property of
+the parallelisation; the measurement was not what was wrong with it, the
+attribution was, and Section~\ref{subsec:order} makes the attribution
+measurable.
  
 Second, the three threshold-sharing strategies scale smoothly, while the
 non-sharing strategy flattens early. PC reaches between $3.3\times$ and
@@ -1365,8 +1385,8 @@ reversed order alone. ``Work @8 threads'' is FJ's join count relative to
 SEQ at eight threads, for comparison with SEQ-REV's at one.}
 \end{table}
  
-Columns 3 and 4 agree to two decimal places on eight of the nine
-datasets and to within $2\%$ on the ninth. The underlying identity is
+Columns 3 and 4 agree to two decimal places on six of the nine datasets
+and to within $2\%$ on the remaining three. The underlying identity is
 exact: at every $(\text{dataset},\Kk)$ cell, FJ on one thread attempts
 precisely the number of joins SEQ-REV attempts, to the digit. The small
 residual in the times is scheduling overhead, and on Kosarak at
@@ -1394,14 +1414,22 @@ loss exactly as readily as the win, which is why its speedup on Kosarak
 is $2.01\times$ while a strategy that commits to no particular order
 reaches $5.10\times$ on the same data.
  
-This also explains the super-linear figure reported previously. That
-measurement was taken on Chess, the dataset where the reversed order
-helps most, with an experimental harness that did not discard warm-up
-repetitions, so a sequential baseline inflated by just-in-time
-compilation was divided into a parallel time that was not. The
-order effect and the measurement artefact compounded. Neither survives
-once the baseline is measured at steady state and the order is
-controlled for.
+
+This also explains the super-linear figure reported previously, and what
+survives of it. That measurement was taken on Chess, the dataset where
+the reversed order helps most, with an experimental harness that did not
+discard warm-up repetitions, so a sequential baseline inflated by
+just-in-time compilation was divided into a parallel time that was not.
+Of the two compounding causes, the measurement artefact does not survive
+a steady-state baseline: it is gone from the present data. The order
+effect does survive, and with it one super-linear cell---fork--join on
+Chess at $\Kk=50$, at $9.11\times$ on eight threads. What the control
+changes is not the number but what may be concluded from it. That cell
+is $2.50\times$ faster than SEQ on a single thread, so the factor by
+which its eight workers improve on its own sequential execution is
+$3.64\times$; the excess over eight belongs to an enumeration order
+that any sequential miner can adopt, and on five of the nine datasets
+would do better to avoid.
  
 % ---------------------------------------------------------------------
 % Source: analysis/tables/table_main.tex, work-ratio column
@@ -1463,10 +1491,11 @@ Table~\ref{tab:main} gives time, speedup and work ratio for all four
 strategies at eight threads.
  
 PC is the best strategy on seven of the nine datasets and is within
-$3.5\%$ of the best on an eighth (Mushroom). Its work ratio stays within
-$1.05$--$1.18$ everywhere: it neither saves work nor wastes it, because
-it imposes no traversal order of its own---its consumers take prefixes
-in sequential order---and it shares the threshold. It is, in the sense
+$3.5\%$ of the best on an eighth (Mushroom). Its work ratio stays within $0.81$--$1.18$ everywhere, and the width of
+that band is the point: PC imposes no traversal order of its own---its
+consumers take prefixes in sequential order---so it neither gains nor
+pays the order gamble, and what remains below one on Chess
+($0.809$) and Accidents ($0.883$) is threshold sharing acting alone. It is, in the sense
 R2 asked us to make precise, the \emph{robust} choice: not the fastest
 in every case, but the one whose worst case is mildest, and the only
 strategy whose behaviour does not depend on a property of the data that
