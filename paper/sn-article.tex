@@ -1,6 +1,14 @@
 \documentclass[pdflatex,sn-vancouver-num]{sn-jnl}
 
 \usepackage{graphicx}%
+\usepackage{placeins}
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{5}
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.7}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.7}
 \usepackage{multirow}%
 \usepackage{amsmath,amssymb,amsfonts}%
 \usepackage{amsthm}%
@@ -16,9 +24,9 @@
 
 \theoremstyle{thmstyleone}%
 \newtheorem{theorem}{Theorem}%
-\newtheorem{proposition}[theorem]{Proposition}%
-\newtheorem{lemma}[theorem]{Lemma}%
-\newtheorem{corollary}[theorem]{Corollary}%
+\newtheorem{proposition}{Proposition}%
+\newtheorem{lemma}{Lemma}%
+\newtheorem{corollary}{Corollary}%
 \theoremstyle{thmstyletwo}%
 \newtheorem{example}{Example}%
 \newtheorem{remark}{Remark}%
@@ -57,33 +65,51 @@
 \affil[1]{\orgdiv{Faculty of Information Technology}, \orgname{Ton Duc Thang University}, \orgaddress{\city{Ho Chi Minh City}, \country{Vietnam}}}
 \affil[2]{\orgdiv{Natural Language Processing and Knowledge Discovery Laboratory, Faculty of Information Technology}, \orgname{Ton Duc Thang University}, \orgaddress{\city{Ho Chi Minh City}, \country{Vietnam}}}
 
+
 \abstract{%
-Top-$\Kk$ high-utility itemset mining frees the analyst from choosing a minimum
-utility threshold; mining over \emph{uncertain} databases models the existence
-probabilities that arise from noisy or aggregated data; and admitting
-\emph{negative} item profits captures losses that co-occur with gains. Their
-combination defines the Top-$\Kk$ Probabilistic Positive--Negative High-Utility
-Itemset (PPNHUI) problem. Because negative profits invalidate the
-utility-based anti-monotonicity that ordinarily prunes the search, the candidate
-space is substantially enlarged, so efficient parallel execution becomes
-essential---yet its effectiveness is far from self-evident: the top-$\Kk$
-admission threshold rises only as high-utility itemsets are discovered, at a rate
-that is strongly data-dependent. We define a common mining core built on a
-utility--probability list, the UPU-List, equipped with a three-tier pruning
-scheme, and prove that all three bounds remain valid upper bounds when item
-profits may be negative. Against an exact sequential baseline, we instantiate this
-core under four parallelisation strategies that span two design axes, namely
-threshold sharing and load balancing. A work-ratio metric, defined as the number
-of list-join operations performed relative to the sequential baseline, separates
-algorithmic pruning from raw hardware parallelism. Experiments on four benchmark
-datasets reveal a clear regime spectrum. On dense data, cooperative threshold
-escalation lets the work-stealing strategy perform as little as one tenth of the
-sequential work and attain up to $27.5\times$ speedup on eight threads, exceeding
-linear scaling; on sparse data the same strategy performs more work than the
-baseline, and a producer--consumer strategy proves the most robust. The
-non-sharing strategy is consistently the weakest and can run slower than the
-sequential baseline. The work-ratio metric accounts for the entire spectrum and
-indicates which parallel strategy is preferable for a given data regime.
+Mining high-utility itemsets from real-world data often meets three
+challenges at once: the analyst cannot set a sensible minimum-utility
+threshold in advance (top-$\Kk$ mining), the data is noisy or aggregated
+and each entry carries an existence probability (uncertain databases),
+and some items represent losses rather than gains (negative profits).
+Together these define the Top-$\Kk$ Probabilistic Positive--Negative
+High-Utility Itemset (PPNHUI) problem. Negative profits invalidate
+utility-based pruning and enlarge the search, which makes parallel
+execution attractive; but in top-$\Kk$ mining the admission threshold is
+discovered during the search, so a worker can either help its peers by
+raising it early or waste effort on branches a peer has already made
+redundant. We give an exact mining core based on a utility--probability
+list (UPU-List) with three upper bounds, proven valid under negative
+profits and under both a discovered and a supplied threshold, and use it
+to study four classical shared-memory parallelisation schemes that differ
+along two axes: threshold sharing and load balancing. Two of the four
+differ in exactly one variable, which makes their gap a controlled
+measurement of what sharing is worth, and we add a sequential
+reverse-order control that isolates the order in which prefixes are
+enumerated from the parallel machinery. The control changes the
+conclusion. A work-stealing scheduler appears to prune aggressively, but
+on one thread it attempts exactly the same list joins as the sequential
+control---the same count, to the digit, on every dataset and every
+$\Kk$---and matches its runtime to within a few percent, and at eight
+threads its work ratio still tracks that control: its pruning follows from the order
+its task decomposition happens to impose, not from cooperation between
+workers. That order is a gamble rather than a gain---it cuts the work to
+$0.53\times$ on one dataset and raises it to $2.34\times$ on another---and
+the scheduler inherits the loss as readily as the win. Threshold sharing,
+measured on the controlled pair instead, is the mechanism that works: it
+saves between $1.12\times$ and $3.01\times$ of the exploration on every
+dataset, dense and sparse alike, and it is precisely what the
+partition-local pattern used throughout the parallel HUIM literature
+forgoes. A producer--consumer scheduler, which shares the threshold and
+imposes no order of its own, is the best or joint-best choice on eight of
+the nine datasets. All of these effects vanish under a supplied
+threshold, where the work ratio is exactly $1.000$ in every configuration
+measured, so the design question studied here belongs to top-$\Kk$ mining
+rather than to parallel utility mining in general. The core is validated
+itemset by itemset against an independent published exact miner on a
+reduced base case, where it is also faster. We close with a diagnostic
+that needs one sequential measurement rather than a guess from data
+statistics.
 }
 
 \keywords{high-utility itemset mining, uncertain databases, top-$\Kk$ mining,
@@ -121,23 +147,50 @@ hardware speedup.
 This paper provides such a study for the \emph{shared-memory} setting, where the
 exact, instantaneous sharing of a global threshold is possible---something a
 distributed engine cannot easily offer. Our contributions are:
+
+
 \begin{enumerate}
 \item We formalise the Top-$\Kk$ PPNHUI problem over uncertain databases
-      (Section~\ref{sec:prelim}) and a common mining core built on a
-      utility--probability list (UPU-List) with a three-tier
-      ($\EP$, $\PTWU$, $\PUB$) pruning scheme (Section~\ref{sec:methods}).
-\item We prove that all three pruning tiers remain valid upper bounds when item
-      profits may be negative and that the resulting search is exact
-      (Lemmas~\ref{lem:ep}--\ref{lem:pub}, Theorem~\ref{thm:correct}).
-\item Against an exact sequential baseline, we instantiate the core under
-      \emph{four} shared-memory parallel strategies that span two design
-      axes---threshold sharing and load balancing---and analyse them with a
-      \emph{work-ratio} metric.
-\item On four datasets we show a regime spectrum: cooperative threshold
-      escalation yields up to $27.5\times$ (super-linear) speedup on dense data
-      but degrades on sparse data, where a producer--consumer strategy is most
-      robust; the non-sharing strategy is always worst and can be slower than
-      sequential (Sections~\ref{sec:results}--\ref{sec:discussion}).
+      together with its fixed-threshold counterpart
+      (Section~\ref{sec:prelim}), and give a mining core built on a
+      utility--probability list with three upper bounds
+      (Section~\ref{sec:methods}). We prove that all three remain valid
+      when item profits may be negative, and that the search is exact
+      whenever the admission threshold never exceeds the qualifying
+      utility of the answer---a condition that covers both problems and
+      that also establishes the safety of sharing the threshold between
+      workers (Lemmas~\ref{lem:ep}--\ref{lem:pub},
+      Theorem~\ref{thm:correct}).
+ 
+\item We validate that core outside our own code. Reduced to its
+      classical special case it is compared, itemset by itemset and
+      utility by utility, with an independently written published exact
+      miner on the same data (Section~\ref{subsec:basecase}), so the
+      claim of exactness does not rest on agreement with our own
+      sequential baseline.
+ 
+\item We introduce a control that the parallel mining literature does
+      not use: a sequential miner differing from the baseline only in the
+      direction of its top-level loop (Section~\ref{subsec:seqrev}). It
+      separates the pruning a scheduler obtains from cooperation between
+      its workers from the pruning it obtains merely by visiting prefixes
+      in a different order. We show that without this control the second
+      is routinely mistaken for the first.
+ 
+\item We measure what sharing the admission threshold is worth, using
+      two strategies that share an identical prefix distribution and an
+      identical growth procedure and differ only in whether the collector
+      is shared (Section~\ref{subsec:sharing}). This isolates the
+      mechanism from load balancing, which the usual comparison between
+      parallel schemes confounds with it.
+ 
+\item We evaluate the four schemes on nine benchmarks spanning three
+      orders of magnitude of density, at one, two, four and eight
+      threads, and we delimit the findings by repeating the study under
+      a supplied threshold, where the mechanisms under examination no
+      longer act (Sections~\ref{sec:results}--\ref{sec:discussion}). We
+      conclude with a selection diagnostic that a practitioner can
+      measure with a single sequential run.
 \end{enumerate}
 
 \section{Related Work}\label{sec:related}
@@ -161,35 +214,123 @@ Lin et al.~\cite{lin2016phuim} introduced potential high-utility itemset mining
 PHUI-List built on a probability-utility (PU) list; MUHUI~\cite{lin2017muhui}
 adds pruning to the same structure. These methods mine \emph{all} potential
 high-utility itemsets rather than a top-$\Kk$ set, and assume non-negative profits.
-Most recently, Nguyen and Nguyen~\cite{nguyen2025dynamic} mine top-$\Kk$
-high-utility itemsets from uncertain databases using dynamic minimum-probability
-and utility thresholds---the closest prior setting to ours, yet still without
-negative profits or any parallel treatment.
+Closest to our setting, Nguyen and Nguyen~\cite{nguyen2025dynamic}
+attack the top-$\Kk$ problem over uncertain data by letting both the
+probability and the utility admission thresholds tighten as mining
+proceeds, so that early discoveries restrict the remaining search.
+Their setting keeps profits non-negative and their algorithm is
+sequential, so the question of how several workers should share a
+rising threshold---the subject of this paper---does not arise there.
+
 
 \paragraph{HUIM with negative utilities.}
 HUINIV-Mine~\cite{chu2009huiniv} first handled negative item values;
-FHN~\cite{lin2016fhn} introduced a positive-and-negative utility list (PNU-list)
-that is far faster, and surveys document the area~\cite{singh2018negsurvey}. Most
-recently, TopHUI~\cite{gan2020tophui} performs \emph{top-$\Kk$} HUIM with negative
-utility---but for \emph{certain} databases; other recent methods mine negatives
-from unstable negative-profit databases~\cite{tung2024unstable} and high-utility
-sequences with positive and negative values~\cite{zhang2023posneg}. Our UPU-List combines the PU-list
-idea of~\cite{lin2016phuim} with the positive/negative bookkeeping
-of~\cite{lin2016fhn}; the structure itself is therefore evolutionary rather than
-novel, which is why our contribution is the parallel study, not the data
-structure.
+FHN~\cite{lin2016fhn} introduced a positive-and-negative utility list
+(PNU-list) that is far faster, and surveys document the
+area~\cite{singh2018negsurvey}. Negative profits have since been
+combined with top-$\Kk$ selection in the \emph{certain} setting: TKN
+mines the top-$\Kk$ itemsets under positive or negative
+profits~\cite{krishnamoorthy2022tkn}, TopHUI addresses the same problem
+with a different bound~\cite{gan2020tophui}, and TKHN improves the
+threshold-raising strategies for it~\cite{singh2026tkhn}. Related
+variants mine negatives from unstable negative-profit
+databases~\cite{tung2024unstable} and from high-utility sequences with
+positive and negative values~\cite{zhang2023posneg}. All of these assume
+certain data and are sequential. Our UPU-List combines the PU-list idea
+of~\cite{lin2016phuim} with the positive/negative bookkeeping
+of~\cite{lin2016fhn}; the structure itself is therefore evolutionary
+rather than novel, which is why our contribution is the parallel study
+and its attribution methodology, not the data structure.
 
 \paragraph{Parallel and distributed HUIM.}
 Big-data HUIM has largely been distributed: PHUI-Growth on
 Hadoop~\cite{lin2015bigdata}, PKU for parallel top-$\Kk$ HUIM on
-Spark~\cite{lin2019pku}, P-FHM+ on Spark~\cite{sethi2018pfhm}, GPU-based
-heuristics~\cite{fang2024gpu}, Hadoop-based P-EFIM~\cite{cheng2023hadoop}, and
-more recent Spark-based parallel HUIM~\cite{li2024spark}. These frameworks partition the work into largely
-independent subtasks and therefore cannot share an exact global threshold across
-nodes. Shared-memory multi-core HUIM has received far less attention, and to our
-knowledge no prior work studies how the choice of shared-memory parallelisation
-strategy interacts with top-$\Kk$ threshold dynamics under \emph{uncertain,
-positive--negative} utilities. That gap is the subject of this paper.
+Spark~\cite{lin2019pku}, P-FHM+ on Spark~\cite{sethi2018pfhm},
+Hadoop-based P-EFIM~\cite{cheng2023hadoop}, and more recent Spark-based
+parallel HUIM~\cite{li2024spark}. These frameworks partition the work
+into largely independent subtasks and therefore cannot share an exact
+global threshold across nodes. A separate line of work accelerates HUIM
+on GPUs using population-based heuristics, of which PHA-HUIM is the most
+recent representative~\cite{fang2024gpu}.
+ 
+We deliberately do not report a head-to-head runtime comparison against
+either family, for reasons that are properties of the problems being
+solved rather than of any particular implementation. The GPU heuristics
+return \emph{approximate} answers: PHA-HUIM evolves a fixed-size
+population under a utility fitness function and reports the high-utility
+itemsets its population happens to contain when the iteration budget is
+exhausted, with no guarantee of completeness. Our method is exact
+(Theorem~\ref{thm:correct}), and a wall-clock comparison between an
+exact and an approximate search is uninterpretable unless solution
+quality is controlled, since an approximate method can always be made
+faster by searching less. The two also differ in hardware---massively
+parallel GPU versus commodity multi-core CPU---so a runtime ratio would
+measure the hardware rather than the algorithm; and in the query itself,
+since the GPU heuristics mine at a fixed minimum-utility threshold
+whereas we solve the top-$\Kk$ problem, in which the threshold is
+discovered during the search and is precisely what the parallelisation
+strategies contend over. The distributed frameworks differ from our
+setting along that same last axis: they cannot maintain the exact shared
+threshold whose dynamics are the subject of this study. We therefore
+validate against an exact reference instead:
+Section~\ref{subsec:basecase} reduces our algorithm to the classical
+HUIM special case and checks it, itemset by itemset, against EFIM as
+distributed in SPMF~\cite{fournierviger2014spmf,zida2017efim}---an
+independently written, published, exact miner that shares no code, data
+structure or author with our implementation.
+
+\paragraph{Shared-memory parallel HUIM.}
+Multi-core HUIM has attracted less attention than the distributed
+setting, but it is not unexplored. Atmaja and Sonawane parallelise a utility-list buffer miner over shared memory, dividing the search space across threads~\cite{atmaja2023smplb}.
+Most relevant to us, Tung et al.\ mine top-$\Kk$ multi-level high-utility
+itemsets with multi-core parallelism~\cite{tung2026multicore}, the
+closest prior combination of top-$\Kk$ selection with shared-memory
+parallel execution. That work parallelises a multi-level mining
+task over certain, non-negative data and reports wall-clock speedup;
+it does not separate the pruning that threshold sharing produces
+from the parallelism that produces it, which is the question we study.
+To our knowledge no prior work examines how the \emph{choice} of
+shared-memory parallelisation strategy interacts with top-$\Kk$
+threshold dynamics under uncertain, positive--negative utilities, nor
+isolates the enumeration-order component of the resulting speedup. That
+is the gap this paper addresses, and Table~\ref{tab:litcompare} places
+our setting among the closest prior work.
+
+\begin{table}[h]
+\caption{Position of this work among the closest prior methods.}
+\label{tab:litcompare}
+\footnotesize\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}llccccc@{}}
+\toprule
+Method & Year & Top-$\Kk$ & Neg. & Unc. & Par. & Exact \\
+\midrule
+TKO~\cite{tseng2016topk}                & 2016 & \checkmark & & & & \checkmark \\
+KHMC~\cite{duong2016khmc}               & 2016 & \checkmark & & & & \checkmark \\
+FHN~\cite{lin2016fhn}                   & 2016 & & \checkmark & & & \checkmark \\
+PHUI-List~\cite{lin2016phuim}           & 2016 & & & \checkmark & & \checkmark \\
+MUHUI~\cite{lin2017muhui}               & 2017 & & & \checkmark & & \checkmark \\
+TopHUI~\cite{gan2020tophui}             & 2020 & \checkmark & \checkmark & & & \checkmark \\
+TKN~\cite{krishnamoorthy2022tkn}        & 2022 & \checkmark & \checkmark & & & \checkmark \\
+PKU~\cite{lin2019pku}                   & 2019 & \checkmark & & & D  & \checkmark \\
+P-FHM+~\cite{sethi2018pfhm}             & 2018 & & & & D  & \checkmark \\
+P-EFIM~\cite{cheng2023hadoop}           & 2023 & & & & D  & \checkmark \\
+PHA-HUIM~\cite{fang2024gpu}             & 2024 & & & & D  & \\
+SM-PLB~\cite{atmaja2023smplb}            & 2023 & & & & SM & \checkmark \\
+TKHN~\cite{singh2026tkhn}               & 2026 & \checkmark & \checkmark & & & \checkmark \\
+Tung et al.~\cite{tung2026multicore}    & 2026 & \checkmark & & & SM & \checkmark \\
+Nguyen and Nguyen~\cite{nguyen2025dynamic} & 2025 & \checkmark & & \checkmark & & \checkmark \\
+\midrule
+\textbf{This work}                      & --- & \checkmark & \checkmark & \checkmark & SM & \checkmark \\
+\botrule
+\end{tabular}
+\vspace{2pt}
+ 
+{\footnotesize Top-$\Kk$: the admission threshold is discovered during the
+search rather than supplied. Neg.: item profits may be negative. Unc.:
+uncertain data with per-item existence probabilities. Par.: parallel
+execution, SM shared memory, D distributed or GPU. Exact: returns a
+provably complete answer.}
+\end{table}
 
 \section{Preliminaries and Problem Statement}\label{sec:prelim}
 \subsection{Basic Concepts}\label{subsec:defs}
@@ -204,8 +345,9 @@ $\prob(i,T_d)\in(0,1]$. Item probabilities are assumed independent.
 \end{definition}
 
 \begin{definition}[Utility]\label{def:util}
-$\uu(i,T)=\pr(i)\cdot\qty(i,T)$ and, for $\itemset\subseteq T$,
-$\uu(\itemset,T)=\sum_{i\in \itemset}\pr(i)\,\qty(i,T)$, which may be negative.
+$\uu(i,T)=\pr(i)\,\qty(i,T)$ and, for $\itemset\subseteq T$,
+$\uu(\itemset,T)=\sum_{i\in \itemset}\pr(i)\,\qty(i,T)$, which may be
+negative.
 \end{definition}
 
 \begin{definition}[Probabilities]\label{def:prob}
@@ -221,34 +363,78 @@ Because $\uu(\itemset,T)$ may be negative, $\EU(\itemset)$ may be negative.
 \end{definition}
 
 \begin{problem}[Top-$\Kk$ PPNHUI mining]\label{prob:main}
-Given $\DB$, a profit table $\pr$ (possibly negative), $\Kk\ge 1$ and
-$\minprob\in[0,1]$, let
-$\mathcal{V}=\{\itemset\subseteq I:\itemset\neq\emptyset,\ \EP(\itemset)\ge\minprob\}$.
-Return $\mathcal{R}\subseteq\mathcal{V}$ with $|\mathcal{R}|=\min(\Kk,|\mathcal{V}|)$
-such that $\EU(\itemset)\ge\EU(Y)$ for every $\itemset\in\mathcal{R}$ and
-$Y\in\mathcal{V}\setminus\mathcal{R}$.
+Throughout, itemsets are non-empty. Given $\DB$, a profit table $\pr$,
+$\Kk\ge 1$ and $\minprob\in[0,1]$, let
+$\mathcal{V}=\{\itemset\subseteq I:\EP(\itemset)\ge\minprob\}$.
+Return $\mathcal{R}\subseteq\mathcal{V}$ with
+$|\mathcal{R}|=\min(\Kk,|\mathcal{V}|)$ such that
+$\EU(\itemset)\ge\EU(Y)$ for every $\itemset\in\mathcal{R}$ and
+$Y\in\mathcal{V}\setminus\mathcal{R}$. Setting $\minprob=0$ admits every
+itemset that occurs at all, which recovers the top-$\Kk$ problem without
+a probabilistic filter.
 \end{problem}
+
+
+\begin{problem}[Fixed-threshold PPNHUI mining]\label{prob:minutil}
+Given $\DB$, a profit table $\pr$, a threshold $\mu\in\mathbb{R}$ and
+$\minprob\in[0,1]$, return
+$\{\itemset\subseteq I:\EP(\itemset)\ge\minprob,\
+\EU(\itemset)\ge\mu\}$, that is, \emph{every} valid itemset whose
+expected utility reaches $\mu$.
+\end{problem}
+ 
+\begin{remark}[One core, two questions]\label{rem:twomodes}
+Problems~\ref{prob:main} and~\ref{prob:minutil} differ only in where the
+admission threshold $\tau$ comes from. In Problem~\ref{prob:main} it is
+\emph{discovered}: it starts at $-\infty$ and rises to the $\Kk$-th best
+$\EU$ found so far. In Problem~\ref{prob:minutil} it is \emph{supplied}
+and constant, $\tau=\mu$. Everything else---the UPU-List, the join, and
+the three pruning tiers---is identical, so a single implementation
+answers both, and Theorem~\ref{thm:correct} covers both because its
+proof requires only that $\tau$ never exceed the final answer's
+qualifying utility, which a constant $\tau=\mu$ satisfies trivially.
+This is not a mere convenience: Section~\ref{subsec:basecase} uses the
+fixed-threshold mode to compare against an external exact miner, and
+finds that the dynamics this paper studies exist only when $\tau$ is
+discovered.
+\end{remark}
 
 \begin{remark}[Negative-utility itemsets]\label{rem:negEU}
 Problem~\ref{prob:main} places no sign constraint on $\EU$: when fewer than $\Kk$
 valid itemsets have non-negative expected utility, the least-negative ones are
 returned. This matches the positive--negative setting and our implementation. If
 an application requires $\EU\ge0$, one adds that constraint to $\mathcal{V}$ and
-lower-bounds the admission threshold at $0$.
+lower-bounds the admission threshold at $0$, which is Problem~\ref{prob:minutil} with $\mu=0$ intersected with a top-$\Kk$ cut.
 \end{remark}
 
 \subsection{Illustrative Example}\label{subsec:example}
+
 Table~\ref{tab:exampledb} shows a small uncertain database over items
-$\{a,b,c\}$ with profits $\pr(a)=5$, $\pr(b)=-3$, $\pr(c)=2$ (so $b$ is a
-negative-profit item); each entry lists an item's quantity and existence
-probability. Applying Definition~\ref{def:prob}, Table~\ref{tab:exampleeu} gives
-$\EU$ and $\EP$ for every itemset. With $\minprob=0.7$ all six itemsets are valid,
-and ranking them by $\EU$ gives
-$\{a\}\!>\!\{a,c\}\!>\!\{c\}\!>\!\{a,b\}\!>\!\{b,c\}\!>\!\{b\}$. For $\Kk\le4$ the
-answer contains only positive-$\EU$ itemsets, but for $\Kk=5$ it must include
-$\{b,c\}$ ($\EU=-2.75$) and for $\Kk=6$ also $\{b\}$ ($\EU=-9.3$): a concrete
-instance of Remark~\ref{rem:negEU}. Note also that $\EP(\{b\})=1$ because $b$
-occurs with probability $1$ in transaction $T_4$.
+$\{a,b,c\}$ with profits $\pr(a)=5$, $\pr(b)=-3$, $\pr(c)=2$ (so $b$ is
+a negative-profit item); each entry lists an item's quantity and
+existence probability. Applying Definition~\ref{def:prob},
+Table~\ref{tab:exampleeu} gives $\EU$ and $\EP$ for every itemset. With
+$\minprob=0.7$ all seven non-empty itemsets are valid, and ranking them
+by $\EU$ gives
+$\{a\}\!>\!\{a,c\}\!>\!\{c\}\!>\!\{a,b\}\!>\!\{a,b,c\}\!>\!\{b,c\}\!>\!\{b\}$.
+ 
+The ranking illustrates Remark~\ref{rem:negEU} concretely. For
+$\Kk\le5$ the answer contains only positive-$\EU$ itemsets, even though
+two of them---$\{a,b\}$ and $\{a,b,c\}$---contain the negative-profit
+item $b$: a negative item does not make an itemset unprofitable, it
+only subtracts from it. At $\Kk=6$ the answer must admit
+$\{b,c\}$ ($\EU=-2.75$), and at $\Kk=7$ also $\{b\}$ ($\EU=-9.3$),
+because no other valid itemset remains. A top-$\Kk$ miner that refused
+negative-$\EU$ patterns would return fewer than $\Kk$ answers here and
+would therefore not solve Problem~\ref{prob:main}.
+ 
+Two further points are worth noting. First, $\EP(\{b\})=1$ because $b$
+occurs with probability $1$ in transaction $T_4$; an item with a
+negative profit can still be certain to occur. Second, every row
+satisfies $\EU\le\PTWU$, as Lemma~\ref{lem:ptwu} requires, and the
+slack is large---$\{a\}$ has $\EU=14.50$ against $\PTWU=28$---which is
+why the $\PTWU$ tier alone prunes far less than the three tiers
+together.
 
 \begin{table}[t]
 \caption{Example uncertain database over items $\{a,b,c\}$ with profits
@@ -271,36 +457,52 @@ $T_4$ & $(1,0.8)$ & $(1,1.0)$ & --        & $5$ \\
 \end{table}
 
 \begin{table}[t]
-\caption{Expected utility, existential probability and the $\PTWU$ upper bound
-for every itemset of the database in Table~\ref{tab:exampledb}, in descending
-$\EU$ order. Column $|X|$ is the itemset size. Note $\EU\le\PTWU$ in every row
-(Lemma~\ref{lem:ptwu}). Negative-$\EU$ itemsets are shown in italics; with
-$\Kk=4$ the top-$\Kk$ set is the first four rows, whereas $\Kk=5$ and $\Kk=6$ must
-admit the negative-$\EU$ itemsets $\{b,c\}$ and $\{b\}$.}\label{tab:exampleeu}
+\caption{Expected utility, existential probability and the $\PTWU$
+bound for every itemset of Table~\ref{tab:exampledb}, in descending
+$\EU$ order.}\label{tab:exampleeu}
 \begin{tabular}{@{}lccrr@{}}
 \toprule
 Itemset & $|X|$ & $\EP$ & $\EU$ & $\PTWU$ \\
 \midrule
-$\{a\}$    & $1$ & $0.992$ & $14.50$ & $28$ \\
-$\{a,c\}$  & $2$ & $0.942$ & $13.02$ & $23$ \\
-$\{c\}$    & $1$ & $1.000$ & $9.80$  & $27$ \\
-$\{a,b\}$  & $2$ & $0.944$ & $0.88$  & $12$ \\
-\textit{$\{b,c\}$} & $2$ & $0.890$ & \textit{$-2.75$} & $11$ \\
-\textit{$\{b\}$}   & $1$ & $1.000$ & \textit{$-9.30$} & $16$ \\
+$\{a\}$              & $1$ & $0.992$ & $14.50$ & $28$ \\
+$\{a,c\}$            & $2$ & $0.942$ & $13.02$ & $23$ \\
+$\{c\}$              & $1$ & $1.000$ & $9.80$  & $27$ \\
+$\{a,b\}$            & $2$ & $0.944$ & $0.88$  & $12$ \\
+$\{a,b,c\}$          & $3$ & $0.720$ & $0.72$  & $7$  \\
+\textit{$\{b,c\}$}   & $2$ & $0.890$ & \textit{$-2.75$} & $11$ \\
+\textit{$\{b\}$}     & $1$ & $1.000$ & \textit{$-9.30$} & $16$ \\
 \botrule
 \end{tabular}
+\vspace{2pt}
+ 
+{\footnotesize Column $|X|$ is the itemset size. Negative-$\EU$ itemsets
+are in italics. Every row satisfies $\EU\le\PTWU$
+(Lemma~\ref{lem:ptwu}). With $\Kk=5$ the answer is the first five rows,
+all of positive $\EU$; $\Kk=6$ and $\Kk=7$ must admit the negative-$\EU$
+itemsets $\{b,c\}$ and $\{b\}$.}
 \end{table}
 
 \section{Proposed Methods}\label{sec:methods}
 \subsection{Mining Core and Upper Bounds}\label{subsec:core}
 The sequential baseline and the four parallel strategies share one mining core
 and differ only in how Phase~3 is
-parallelised (Figure~\ref{fig:pipeline}). Phase~1 scans $\DB$ once to compute
-per-item bounds and
-probabilities, discards items that cannot belong to any valid pattern, and builds
-a UPU-List per surviving item. Phase~2 seeds the result with the valid
+parallelised (Figure~\ref{fig:pipeline}). Phase~1 scans $\DB$ once to compute per-item bounds and probabilities, discards items that cannot belong to any valid pattern, and builds a UPU-List per surviving item. Phase~2 seeds the result with the valid
 $1$-itemsets. Phase~3 is a depth-first traversal of the set-enumeration tree that
-extends each prefix by joining UPU-Lists and applies three pruning tiers.
+extends each prefix by joining UPU-Lists, applying the three bounds at
+four points. On entering a node the prefix's own $\PTWU$ is tested,
+which abandons an entire subtree for the cost of one comparison. Inside
+\textsc{Join} the bound $\PTWU(Z)=\min(\PTWU(\itemset),\PTWU(e))$ is
+available \emph{before} any transaction is examined, so a doomed
+extension is rejected without paying for the merge at all; this
+pre-merge test is the cheapest pruning in the algorithm and, on dense
+data, the one that fires most often. Only when the merge does happen are
+the remaining tests applied to its result, in the order $\EP$, $\PTWU$,
+$\PUB$ --- cheapest first, since $\EP$ and $\PTWU$ are single cached
+values whereas $\PUB$ was accumulated during the merge. The sequence is
+therefore $\PTWU$ at the node, $\PTWU$ before the merge, then $\EP$,
+$\PTWU$ and $\PUB$ on the result, rather than the flat
+$\EP\to\PTWU\to\PUB$ ordering that the phrase ``three tiers'' might
+suggest.
 
 \begin{figure}[t]
 \centering
@@ -334,7 +536,10 @@ During the same pass the four cached aggregates are accumulated as
 \EP(Z)=1-\prod_{t}\bigl(1-e^{\log\mathrm{P}(Z,t)}\bigr). \label{eq:joinep}
 \end{gather}
 where $\EP(Z)$ is accumulated in log-space for numerical stability. These are
-exactly the operations annotated in Figure~\ref{fig:upulist}.
+exactly the operations annotated in Figure~\ref{fig:upulist}. The bound cached in a joined list is $\min(\PTWU(\itemset),\PTWU(e))$, which
+is valid but possibly looser than the sum $\sum_{T\supseteq Z}\PTU(T)$
+defined below, since $\{T\supseteq Z\}$ is a subset of both occurrence sets;
+Lemma~\ref{lem:ptwu} holds for either.
 Fix a total order $\prec$ on
 items (descending $\PTWU$). With $\PTU(T)=\sum_{i\in T,\pr(i)>0}\pr(i)\qty(i,T)$,
 
@@ -351,6 +556,13 @@ Eqs.~\eqref{eq:joinrow}--\eqref{eq:joinep}.}\label{fig:upulist}
 \rem(\itemset,T)=\sum_{\substack{i\in T,\ i\succ \itemset,\ \pr(i)>0}}\pr(i)\qty(i,T), \label{eq:ptwurem}\\
 \PUB(\itemset)=\sum_{\substack{T\supseteq \itemset:\ \uu(\itemset,T)+\rem(\itemset,T)>0}}\mathrm{P}(\itemset,T)\bigl(\uu(\itemset,T)+\rem(\itemset,T)\bigr). \label{eq:pub}
 \end{gather}
+
+Throughout the listings, $\epsilon=10^{-9}$ is the tolerance with which
+floating-point comparisons against a threshold are made, and
+$\textsc{LogZero}=-700$ is the floor of the log-space probability
+accumulator, chosen so that $e^{\textsc{LogZero}}$ is indistinguishable
+from $0$ in double precision.
+
 An \emph{extension} of $\itemset$ is any $Z\supseteq \itemset$ whose extra items
 follow $\itemset$ under $\prec$.
 
@@ -388,19 +600,39 @@ Summing over $T\supseteq Z$ and dropping the non-positive terms gives
 $\EU(Z)\le\PUB(\itemset)$.
 \end{proof}
 
+
 \begin{theorem}[Correctness]\label{thm:correct}
-Pruning $\itemset$ when $\EP(\itemset)<\minprob$, $\PTWU(\itemset)<\tau$, or
-$\PUB(\itemset)<\tau$---where $\tau$ is the current $\Kk$-th largest admitted
-$\EU$---never discards an itemset of an exact top-$\Kk$ solution. Hence the search
-is exact.
+Let $\tau$ be any admission threshold that never exceeds the qualifying
+utility of the answer---that is, the final $\Kk$-th largest $\EU$ for
+Problem~\ref{prob:main}, or the constant $\mu$ for
+Problem~\ref{prob:minutil}. Pruning $\itemset$ when
+$\EP(\itemset)<\minprob$, $\PTWU(\itemset)<\tau$ or $\PUB(\itemset)<\tau$
+never discards an itemset of the answer. Hence the search is exact for
+both problems.
 \end{theorem}
 \begin{proof}
-$\tau$ only increases and never exceeds the final $\Kk$-th best $\EU$. By
-Lemma~\ref{lem:ep} an itemset failing the $\EP$ test and all its extensions are
-invalid. By Lemmas~\ref{lem:ptwu}--\ref{lem:pub}, $\PTWU(\itemset)<\tau$ or
-$\PUB(\itemset)<\tau$ implies $\EU(Z)\le\tau$ for every extension $Z$, so none can
-displace a current top-$\Kk$ member. Thus only subtrees lying entirely below the
-final threshold are pruned.
+By Lemma~\ref{lem:ep}, if $\EP(\itemset)<\minprob$ then
+$\EP(Z)\le\EP(\itemset)<\minprob$ for every $Z\supseteq\itemset$, so
+$\itemset$ and all its extensions are invalid and none belongs to the
+answer. By Lemmas~\ref{lem:ptwu}--\ref{lem:pub}, if
+$\PTWU(\itemset)<\tau$ or $\PUB(\itemset)<\tau$ then $\EU(Z)<\tau$ for
+every extension $Z$ of $\itemset$. Since $\tau$ never exceeds the
+qualifying utility, $\EU(Z)<\tau$ implies $Z$ does not qualify: for
+Problem~\ref{prob:minutil} because $\tau=\mu$ and $\EU(Z)<\mu$
+directly; for Problem~\ref{prob:main} because $\tau$ is at all times a
+lower bound on the final $\Kk$-th best $\EU$, so $Z$ cannot displace a
+member of the final top-$\Kk$. In both cases only subtrees lying
+entirely below the qualifying utility are pruned.
+ 
+The top-$\Kk$ collector satisfies the hypothesis: $\tau$ starts at
+$-\infty$, is updated only to the $\Kk$-th largest $\EU$ admitted so
+far, and that quantity increases monotonically towards, but never past,
+the final $\Kk$-th best. The fixed-threshold collector satisfies it
+trivially with $\tau=\mu$ throughout. The hypothesis is also what makes
+threshold \emph{sharing} safe: a thread-local threshold is a smaller
+admissible $\tau$, and the global one is the largest admissible $\tau$
+available at any instant, so sharing prunes more without ever
+endangering a member of the answer.
 \end{proof}
 
 \begin{remark}[Why sharing helps and why negatives matter]\label{rem:sharing}
@@ -416,54 +648,83 @@ sharing and increases redundant parallel exploration.
 Algorithm~\ref{alg:dfs} is the shared growth procedure; $\tau$ is read from a
 top-$\Kk$ collector holding the current $\Kk$ highest-$\EU$ itemsets.
 
+
 \begin{algorithm}[t]
 \caption{\textsc{Grow}: depth-first pattern growth from a prefix}\label{alg:dfs}
 \begin{algorithmic}[1]
 \Require prefix $P$, start index $s$, ordered items $\sigma$, $1$-itemset lists $\mathcal{L}$, collector $C$, $\minprob$
-\State $\tau \gets C.\textsc{threshold}()$
-\If{$P.\PTWU < \tau$} \Return \EndIf
+\If{$P.\PTWU < C.\textsc{threshold}() - \epsilon$} \Return \EndIf \Comment{$\PTWU$ at the node}
 \For{$j \gets s$ \textbf{to} $|\sigma|-1$}
-  \State $J \gets \textsc{Join}(P,\ \mathcal{L}[\sigma[j]],\ \tau)$
-  \If{$J=\textsc{null}$ \textbf{or} $J.\EP<\minprob$ \textbf{or} $J.\PTWU<\tau$ \textbf{or} $J.\PUB<\tau$} \textbf{continue} \EndIf
-  \If{$J.\EU \ge \tau$} $C.\textsc{tryCollect}(J)$ \EndIf
+  \If{$\sigma[j] \notin \mathcal{L}$} \textbf{continue} \EndIf
+  \State $J \gets \textsc{Join}(P,\ \mathcal{L}[\sigma[j]],\ C.\textsc{threshold}())$
+  \If{$J=\textsc{null}$} \textbf{continue} \EndIf \Comment{rejected before the merge}
+  \If{$J.\EP  < \minprob                    - \epsilon$} \textbf{continue} \EndIf
+  \If{$J.\PTWU < C.\textsc{threshold}() - \epsilon$} \textbf{continue} \EndIf
+  \If{$J.\PUB  < C.\textsc{threshold}() - \epsilon$} \textbf{continue} \EndIf
+  \If{$J.\EU  \ge C.\textsc{threshold}() - \epsilon$} $C.\textsc{tryCollect}(J)$ \EndIf
   \State \textsc{Grow}($J,\ j{+}1,\ \sigma,\ \mathcal{L},\ C,\ \minprob$)
 \EndFor
 \end{algorithmic}
 \end{algorithm}
-
-The growth procedure relies on two further operations: the list \textsc{Join}
-(Algorithm~\ref{alg:join}), which merges a prefix with an extension item in one
-linear pass while computing $\EU$, $\EP$, $\PTWU$ and $\PUB$; and
-\textsc{TryCollect} (Algorithm~\ref{alg:collect}), the thread-safe admission of a
-candidate into the shared top-$\Kk$ heap. \textsc{TryCollect} uses a volatile
-threshold for a lock-free fast reject and takes the lock only when a candidate
-might actually be admitted; this is what lets the shared-threshold strategies
-propagate $\tau$ cheaply across workers.
+ 
+Two details of Algorithm~\ref{alg:dfs} are deliberate and matter for the
+results. First, the threshold is \emph{re-read} from the collector at
+every test rather than cached once per node. Under the shared-collector
+strategies this is what lets a discovery made by one worker prune
+another worker's branch part-way through a prefix; caching it would
+still be correct, but would describe a weaker form of sharing and would
+not reproduce the work ratios of Section~\ref{sec:results}. Second, all
+comparisons carry a tolerance $\epsilon=10^{-9}$. Since $\EU$ is
+accumulated in floating point through an exponential, an itemset whose
+expected utility equals the threshold exactly could otherwise be
+rejected by rounding, which would break the exactness of
+Theorem~\ref{thm:correct} in practice even though it holds in exact
+arithmetic.
 
 \begin{algorithm}[t]
 \caption{\textsc{Join}: merge a prefix list with an extension-item list}\label{alg:join}
 \begin{algorithmic}[1]
 \Require prefix list $A$, extension list $B$ (item $e$), threshold $\tau$
 \State $\rho \gets \min(A.\PTWU,\ B.\PTWU)$
-\If{$\rho < \tau$} \Return \textsc{null} \EndIf \Comment{Tier 2, before the merge}
-\State $eu \gets 0$;\ $ub \gets 0$;\ $\ell c \gets 0$;\ $L \gets$ empty list \Comment{$\ell c=\textstyle\sum\log(1-\mathrm P)$}
-\State $i \gets 0$;\ $j \gets 0$
+\If{$\rho < \tau - \epsilon$} \Return \textsc{null} \EndIf \Comment{$\PTWU$ before the merge}
+\State $eu \gets 0$;\ \ $ub \gets 0$;\ \ $\ell c \gets 0$;\ \ $L \gets$ empty list
+\State $i \gets 0$;\ \ $j \gets 0$
 \While{$i<|A|$ \textbf{and} $j<|B|$}
   \If{$A.tid_i = B.tid_j$}
-     \State $u \gets A.u_i + B.u_j$;\ \ $r \gets \min(A.r_i,B.r_j)$;\ \ $\ell p \gets A.\ell p_i + B.\ell p_j$
-     \State append $(A.tid_i,\,u,\,r,\,\ell p)$ to $L$
+     \State $u \gets A.u_i + B.u_j$;\ \ $r \gets \min(A.r_i,\,B.r_j)$;\ \ $\ell p \gets A.\ell p_i + B.\ell p_j$
+     \State append $(A.tid_i,\ u,\ r,\ \ell p)$ to $L$
      \State $eu \gets eu + u\cdot e^{\ell p}$
-     \If{$u+r>0$} $ub \gets ub + e^{\ell p}(u+r)$ \EndIf
-     \State $\ell c \gets \ell c + \log(1-e^{\ell p})$
-     \State $i \gets i+1$;\ $j \gets j+1$
-  \ElsIf{$A.tid_i < B.tid_j$} $i \gets i+1$
-  \Else\ $j \gets j+1$
+     \If{$u+r>0$} \State $ub \gets ub + e^{\ell p}\,(u+r)$ \EndIf
+     \If{$\ell p \ge -\epsilon$} \Comment{$\mathrm P\approx1$: $\EP$ saturates at $1$}
+        \State $\ell c \gets \textsc{LogZero}$
+     \ElsIf{$\ell c > \textsc{LogZero}$}
+        \State $\ell c \gets \max\bigl(\textsc{LogZero},\ \ell c + \log(1-e^{\ell p})\bigr)$
+     \EndIf
+     \State $i \gets i+1$;\ \ $j \gets j+1$
+  \ElsIf{$A.tid_i < B.tid_j$}
+     \State $i \gets i+1$
+  \Else
+     \State $j \gets j+1$
   \EndIf
 \EndWhile
 \If{$L$ is empty} \Return \textsc{null} \EndIf
-\State \Return list for $A\cup\{e\}$ with $\EU{=}eu$, $\EP{=}1-e^{\ell c}$, $\PTWU{=}\rho$, $\PUB{=}ub$
+\State $q \gets (\ell c \le \textsc{LogZero})\ ?\ 1\ :\ 1-e^{\ell c}$
+\State \Return list for $A\cup\{e\}$ with $\EU{=}eu$, $\EP{=}q$, $\PTWU{=}\rho$, $\PUB{=}ub$
 \end{algorithmic}
 \end{algorithm}
+
+The existential probability is accumulated as
+$\ell c=\sum_t\log\bigl(1-\mathrm P(Z,t)\bigr)$ rather than as a product,
+because the product underflows on lists of realistic length. Two guards
+are needed. An entry with $\mathrm P=1$ makes the logarithm diverge, so
+it is treated directly: a single certain occurrence already gives
+$\EP=1$, and the accumulator saturates at a floor \textsc{LogZero}
+($-700$, below which $e^{\ell c}$ is indistinguishable from $0$ in double
+precision) and stops accumulating. This branch is exercised by the example of
+Section~\ref{subsec:example} and by the certain-data base case, where
+every probability equals~$1$; in the benchmark datasets the existence
+probabilities lie strictly below~$1$, so there it is never taken. For $\mathrm P<\tfrac12$ the term is
+evaluated with $\log 1p$ to retain precision.
 
 \begin{algorithm}[t]
 \caption{\textsc{TryCollect}: admit a candidate into the shared top-$\Kk$}\label{alg:collect}
@@ -479,6 +740,16 @@ propagate $\tau$ cheaply across workers.
 \State \textbf{release lock}
 \end{algorithmic}
 \end{algorithm}
+
+Algorithm~\ref{alg:collect} is the only structure shared between workers
+in three of the four strategies. A candidate is first compared with the
+volatile threshold $\tau$ without a lock, which rejects almost every
+candidate cheaply; only a candidate that passes takes the lock, is pushed
+onto the heap, evicts the weakest member if the heap exceeds $\Kk$, and
+republishes $\tau$ as the new $\Kk$-th best $\EU$ (or $-\infty$ while the
+heap is not full). In fixed-threshold mode (Problem~\ref{prob:minutil}) the
+eviction and the update of $\tau$ are omitted and the heap is unbounded, so
+$\tau=\mu$ never moves.
 
 \subsection{Parallelisation Strategies}\label{subsec:parallel}
 
@@ -499,31 +770,45 @@ PHUIM~\cite{lin2016phuim,nguyen2025dynamic}. SEQ is the exact sequential
 reference and the work/time baseline against which the parallel strategies are
 measured.
 
+The four strategies are \emph{alternatives}, not components of one
+pipeline: each run of the miner uses exactly one of them for Phase~3, and
+they are never combined. They are compared on identical input and must
+return identical answers.
+
 Building on this core, the \emph{four} parallel strategies span two axes---whether
 the admission threshold is \emph{shared}, and how prefix tasks are
 \emph{balanced} (Figure~\ref{fig:strategies}):
+
 \begin{itemize}
-\item \textbf{FJ} --- fork--join: prefixes are recursively split into balanced
-batches on a work-stealing pool; one shared collector, so any worker's discovery
-raises $\tau$ for all.
-\item \textbf{TPB} --- thread-pool: prefixes assigned round-robin by $\PTWU$ rank
-to a fixed pool; shared collector, static one-prefix tasks.
-\item \textbf{PLM} --- partition--local merge: $\PTWU$-balanced blocks, each mined
-into a \emph{thread-local} collector, merged at the end; no threshold sharing.
-\item \textbf{PC} --- producer--consumer: a producer enqueues prefix tasks on a
-bounded queue, consumers mine into a shared collector; dynamic scheduling.
+\item \textbf{FJ} --- fork--join: the prefix range is recursively halved
+into tasks on a work-stealing pool, which balances load dynamically; one
+shared collector, so any worker's discovery raises $\tau$ for all.
+\item \textbf{TPB} --- thread-pool: prefixes are distributed round-robin
+over the $\PTWU$-descending order to a fixed pool; one \emph{shared}
+collector; static assignment, no stealing.
+\item \textbf{PLM} --- partition--local merge: the \emph{same}
+round-robin distribution as TPB, but each thread mines into a
+\emph{thread-local} collector and the locals are merged at the end; no
+threshold sharing during mining.
+\item \textbf{PC} --- producer--consumer: a producer enqueues prefix
+tasks on a bounded queue and consumers take them as they fall idle,
+which balances load dynamically; one shared collector.
 \end{itemize}
-By Remark~\ref{rem:sharing}, FJ, TPB and PC prune against the global $\Kk$-th best,
-whereas PLM prunes against weaker local thresholds. SEQ runs the prefixes of
-Phase~3 in a single loop, and TPB submits one static \textsc{Grow} task per
-prefix (in $\PTWU$ order) to a fixed pool that shares the collector; both are
-straightforward and omitted. The three non-trivial schedulers are given in
-Algorithms~\ref{alg:fj}--\ref{alg:pc}. FJ (Algorithm~\ref{alg:fj}) recursively
-halves the prefix range on a work-stealing pool, balancing load dynamically while
-sharing one collector. PLM (Algorithm~\ref{alg:plm}) gives each thread a
-$\PTWU$-balanced block and its \emph{own} collector, merging them only at the end.
-PC (Algorithm~\ref{alg:pc}) feeds prefixes through a bounded queue to consumer
-threads that share the collector.
+ 
+The placement of the four strategies on the two axes
+(Figure~\ref{fig:strategies}) is therefore: FJ and PC balance load
+dynamically, TPB and PLM statically; FJ, TPB and PC share the threshold,
+PLM does not. TPB and PLM deserve particular attention, because they use
+an identical prefix distribution and an identical growth procedure and
+differ in exactly one respect---whether the collector is shared. The
+gap between them is thus a controlled measurement of what threshold
+sharing is worth, with load balancing held fixed. FJ and PC differ from
+them on the load-balancing axis and from each other in how the balancing
+is achieved: FJ decides the split in advance and relies on stealing to
+correct it, PC makes no decision at all and lets demand drive the
+assignment. By Remark~\ref{rem:sharing}, FJ, TPB and PC prune against
+the global $\Kk$-th best, whereas PLM prunes against weaker local
+thresholds.
 
 \begin{algorithm}[t]
 \caption{\textsc{ForkJoinMine} (FJ): recursive prefix-batch scheduling}\label{alg:fj}
@@ -542,21 +827,66 @@ threads that share the collector.
 \end{algorithmic}
 \end{algorithm}
 
+Algorithm~\ref{alg:fj} turns the prefix range into a binary tree of
+tasks. A task covering a single prefix runs \textsc{Grow} on it; a larger
+task forks its left half, which an idle worker may steal, and computes its
+right half itself. Load balancing is therefore dynamic, but the order in
+which prefixes are visited is a by-product of the decomposition: with one
+worker the forked halves are drained last-in-first-out, so prefixes are
+visited in reverse index order (Section~\ref{subsec:seqrev}).
+
 \begin{algorithm}[t]
-\caption{\textsc{PartitionLocalMerge} (PLM): no threshold sharing}\label{alg:plm}
+\caption{\textsc{ThreadPoolMine} (TPB): static round-robin, shared threshold}\label{alg:tpb}
 \begin{algorithmic}[1]
-\Require ordered items $\sigma$, lists $\mathcal{L}$, size $\Kk$, $\minprob$, threads $B$
-\State partition $\{0,\dots,|\sigma|-1\}$ into $\PTWU$-balanced blocks $\Pi_1,\dots,\Pi_B$
-\State create thread-local collectors $C_1,\dots,C_B$, each of size $\Kk$
-\For{$b \gets 1$ \textbf{to} $B$ \textbf{in parallel}}
-  \For{$p \in \Pi_b$}
+\Require ordered items $\sigma$, lists $\mathcal{L}$, \emph{shared} collector $C$, $\minprob$, threads $B$
+\For{$b \gets 0$ \textbf{to} $B-1$} $\Pi_b \gets \{\,i : 0\le i<|\sigma|,\ i \bmod B = b\,\}$ \EndFor
+\For{$b \gets 0$ \textbf{to} $B-1$ \textbf{in parallel}}
+  \For{$p \in \Pi_b$ \textbf{in increasing order}}
+     \State \textsc{Grow}($\mathcal{L}[\sigma[p]],\ p{+}1,\ \sigma,\ \mathcal{L},\ C,\ \minprob$)
+  \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+Algorithm~\ref{alg:tpb} fixes the assignment before mining starts:
+prefix $i$ goes to thread $i \bmod B$, so every thread receives a similar
+mixture of expensive (low index) and cheap (high index) prefixes, and each
+thread processes its share in increasing order. There is no stealing, so a
+thread that finishes early idles, but all threads write into one shared
+collector and therefore prune against the global threshold.
+
+\begin{algorithm}[t]
+\caption{\textsc{PartitionLocalMerge} (PLM): the same distribution as TPB, without threshold sharing}\label{alg:plm}
+\begin{algorithmic}[1]
+\Require ordered items $\sigma$, lists $\mathcal{L}$, global collector $C$ (seeded in Phase~2), size $\Kk$, $\minprob$, threads $B$
+\For{$b \gets 0$ \textbf{to} $B-1$} $\Pi_b \gets \{\,i : i \bmod B = b\,\}$ \EndFor \Comment{identical to TPB}
+\For{$b \gets 0$ \textbf{to} $B-1$}
+  \State $C_b \gets$ new top-$\Kk$ collector
+  \State seed $C_b$ with every valid $1$-itemset \Comment{same start as the shared strategies}
+\EndFor
+\For{$b \gets 0$ \textbf{to} $B-1$ \textbf{in parallel}}
+  \For{$p \in \Pi_b$ \textbf{in increasing order}}
      \State \textsc{Grow}($\mathcal{L}[\sigma[p]],\ p{+}1,\ \sigma,\ \mathcal{L},\ C_b,\ \minprob$)
   \EndFor
 \EndFor
-\State $C \gets$ empty top-$\Kk$;\quad \textbf{for} $b=1$ \textbf{to} $B$: $C.\textsc{merge}(C_b)$
+\For{$b \gets 0$ \textbf{to} $B-1$} $C.\textsc{mergeFrom}(C_b)$ \Comment{deduplicating by itemset} \EndFor
 \State \Return $C$
 \end{algorithmic}
 \end{algorithm}
+
+Two steps of Algorithm~\ref{alg:plm} exist to keep the comparison
+honest. Seeding each local collector with the valid $1$-itemsets costs
+nothing---Phase~2 has already computed them, before the work is
+partitioned---and any sensible partition-local implementation would do
+it. Without it each thread would begin at $\tau=-\infty$ while the
+sharing strategies begin at the $\Kk$-th best $1$-itemset, and the
+penalty we attribute to the loss of sharing would partly be a startup
+handicap we had imposed ourselves. The merge then has to deduplicate by
+itemset, because every local now holds those same $1$-itemsets; a
+multiset merge would insert $B$ copies of each and evict genuine
+patterns, returning a top-$\Kk$ set that differs from the sequential
+reference. Deduplication is in any case the correct semantics: the union
+of several top-$\Kk$ sets is a set of itemsets, not a multiset.
 
 \begin{algorithm}[t]
 \caption{\textsc{ProducerConsumerMine} (PC): dynamic queue scheduling}\label{alg:pc}
@@ -574,278 +904,995 @@ threads that share the collector.
 \end{algorithmic}
 \end{algorithm}
 
+Algorithm~\ref{alg:pc} replaces both the up-front split of FJ and the
+static assignment of TPB by demand. A producer places the prefix indices
+on a bounded queue in increasing order, followed by one poison token per
+consumer; each consumer takes the next index whenever it is idle and mines
+it with \textsc{Grow} against the shared collector. An expensive prefix
+occupies one consumer while the others continue down the queue, and the
+order of consumption is the sequential order, which is why a single
+consumer reproduces SEQ exactly.
+
+\subsection{An enumeration-order control}\label{subsec:seqrev}
+ 
+A strategy can do less work than SEQ for two quite different reasons:
+because its workers share discoveries, or merely because it happens to
+visit the top-level prefixes in a different order. The second effect
+needs no parallelism at all, and it is present here by construction.
+FJ's task decomposition forks the left half of the prefix range and
+computes the right half, so a single work-stealing worker drains its
+deque last-in-first-out and visits the top-level prefixes in reverse
+index order. Since $\sigma$ is ordered by $\PTWU$ descending, FJ at one
+thread mines the \emph{cheap} prefixes first and the expensive ones
+last, while SEQ does the opposite. Mining cheap prefixes first raises
+$\tau$ before the largest subtree is entered, so the $\PTWU$ and $\PUB$
+tests prune far more of it; SEQ pays the full unpruned cost of its most
+expensive subtree while $\tau$ is still at its starting value.
+ 
+To separate the two, we add \textbf{SEQ-REV}: SEQ with its top-level
+loop run in decreasing index order and nothing else changed. The item
+ranking, the suffix bounds, the extension index $j+1$, the three bounds
+and the collector are all untouched, so SEQ-REV explores the same search
+space and returns the same top-$\Kk$ set as SEQ. It is emphatically
+\emph{not} the same as building the UPU-Lists in ascending $\PTWU$
+order, which would renumber the items and change which extensions each
+prefix is allowed---and hence change the search space itself.
+ 
+SEQ-REV decomposes the difference between SEQ and FJ into three
+independent steps:
+\[
+\underbrace{\text{SEQ}\to\text{SEQ-REV}}_{\text{traversal order}}\quad
+\underbrace{\text{SEQ-REV}\to\text{FJ}@1}_{\text{fork--join machinery}}\quad
+\underbrace{\text{FJ}@1\to\text{FJ}@B}_{\text{parallelism}}
+\]
+If SEQ-REV reproduces most of FJ's one-thread advantage, that advantage
+belongs to the enumeration order and is available to a purely sequential
+miner; if it does not, the advantage really is a property of the task
+decomposition, and the control has ruled out the alternative
+explanation. Section~\ref{sec:results} reports which of the two holds.
+The same control doubles as a drift detector for the measurements: every
+strategy at one thread performs exactly the work SEQ or SEQ-REV
+performs, so a one-thread run that differs in \emph{time} while matching
+in \emph{joins} indicates a change in machine conditions rather than in
+the algorithm.
+
+
+\subsection{Complexity}\label{subsec:complexity}
+ 
+Let $n=|\DB|$, let $N=\sum_{T\in\DB}|T|$ be the total number of
+item occurrences, let $\ell=\max_T|T|$ and let $m=|I|$.
+ 
+\paragraph{Phase 1.} Two passes over $\DB$ compute $\PTU$, $\PTWU$ and
+the per-item $\EP$ complements in $O(N)$ time. Ranking the surviving
+items costs $O(m\log m)$. Building the lists sorts each transaction by
+item rank and forms its positive suffix sums; transactions are short, so
+this is done with insertion sort at $O(\ell^{2})$ per transaction, giving
+$O(n\ell^{2}+N)$ overall. Phase~1 therefore costs
+$O(N+n\ell^{2}+m\log m)$ and is linear in the database for the
+transaction lengths that occur in practice.
+ 
+\paragraph{Phase 2.} Admitting the valid $1$-itemsets costs
+$O(m\log \Kk)$.
+ 
+\paragraph{Phase 3.} A node of the set-enumeration tree is one itemset,
+so in the worst case---no pruning---the tree has $2^{m}-1$ nodes and the
+problem is exponential, as it is for every exact HUIM method. The
+meaningful statement is a cost per unit of work actually done. A
+\textsc{Join} of lists of lengths $|A|$ and $|B|$ is a single linear
+merge, $O(|A|+|B|)$, and both are at most $n$. Writing $J$ for the
+number of joins attempted during a run, Phase~3 costs
+$O\bigl(J\cdot\bar{n}\bigr)$ where $\bar{n}$ is the mean list length,
+plus $O(J)$ for the pre-merge $\PTWU$ tests that return without merging.
+Because the three bounds and the item order are identical across all
+strategies, $\bar{n}$ is a property of the data and not of the strategy;
+the strategies differ only in $J$. This is precisely why the work ratio
+$J/J_{\text{SEQ}}$ is the right instrument for comparing them, and why
+it can be read as the share of the dominant cost term that a strategy
+avoids or wastes.
+ 
+\paragraph{Space.} A UPU-List of an itemset occupying $c$ transactions
+holds four arrays of length $c\le n$. A depth-first path holds at most
+one joined list per level and the recursion is at most $m$ deep, so a
+worker needs $O(mn)$ in the worst case and far less in practice, since
+lists shrink rapidly with itemset size. With $B$ workers the mining
+space is $O(Bmn)$; the $1$-itemset lists, $O(N)$ in total, are shared
+read-only. PLM adds $B$ collectors of $\Kk$ patterns, $O(B\Kk)$, and PC a
+bounded queue of $O(m)$ prefix indices.
+ 
+\paragraph{Synchronisation.} \textsc{TryCollect} reads the volatile
+threshold without a lock and acquires one only for a candidate that
+passes that read, so the number of lock acquisitions is bounded by the
+number of candidates that were plausibly admissible at the moment they
+were tested---in practice a small fraction of $J$. PLM acquires no lock
+during mining at all, and $B$ at the merge.
+
+\FloatBarrier
 \section{Experimental Setup}\label{sec:setup}
-All algorithms are implemented in Java and share an identical mining core, so
-performance differences isolate the parallelisation strategy.
+All algorithms are implemented in Java and share one mining core, so
+differences in performance isolate the parallelisation strategy. The
+experimental harness, the dataset generator and the analysis scripts are
+part of the implementation described in the Code availability statement.
+ 
+\paragraph{What ``probabilistic'' means in the data.}
+A transaction in the experiments is a list of entries
+\texttt{item:quantity:probability}, for example \texttt{1:4:0.61}: item~1
+was bought four times, and the database asserts that this entry is present
+with probability $0.61$, independently of the other entries
+(Definition~\ref{def:db}). The algorithm therefore never sees a single
+certain database but a distribution over $2^{N}$ possible worlds, and
+$\EU$ and $\EP$ are the expectation and the existence probability of an
+itemset under that distribution. The profit table is a separate file of
+lines \texttt{item profit}, some of which are negative.
 
-\paragraph{Datasets and profit/probability assignment.}
-We use four standard transactional benchmarks obtained from the SPMF open-source
-data-mining repository~\cite{fournierviger2014spmf} (Table~\ref{tab:datasets}):
-Chess and Mushroom, both originally from the UCI Machine Learning Repository; the
-Retail dataset of a Belgian retail store; and Liquor. They span three orders of
-magnitude in density. Chess and Mushroom are dense, fixed-length transactions;
-Retail and Liquor are sparse. To obtain a positive--negative profit table, each
-item is assigned a profit and a fraction of items is made negative, giving the
-negative fractions ($\%\mathrm{neg}$, $30$--$51\%$) in Table~\ref{tab:datasets};
-profit ranges and average positive/negative profits are summarised in
-Table~\ref{tab:profits}. For Chess, Mushroom and Retail the profits follow the
-standard SPMF utility generation and the $30$--$51\%$ of items with the lowest
-utility are negated; for Liquor each profit is the item's real average utility (so
-positive profits can be large, up to $14{,}615$) and the $30\%$ lowest-utility
-items are negated.
+\paragraph{Datasets.}
+We use nine benchmarks (Table~\ref{tab:datasets}), obtained as raw
+transaction files from the SPMF repository~\cite{fournierviger2014spmf}.
+Their density, the mean transaction length as a percentage of the number
+of items, ranges from $0.03\%$ (Kosarak) to $49.3\%$ (Chess), so the
+suite covers both extremes of the density axis along which the strategies
+are expected to separate. Chess, Mushroom, c20d10k and Accidents are
+dense, with long transactions and few items; Kosarak, Retail, Liquor,
+T10I4D100K and t25i10d10k are sparse or moderately sparse, with many items and
+short transactions.
 
-Regarding uncertainty, all four datasets carry genuine per-item existence
-probabilities taken from their SPMF uncertain versions; the probabilities are
-intrinsic to the data and are not assigned by us. In every dataset a substantial
-fraction of items have an existence probability of exactly $1.0$. Because expected
-utility scales with existence probability (Definition~\ref{def:prob}), itemsets
-formed from such probability-one items attain the highest expected utility and are
-therefore admitted into the top-$\Kk$ ahead of itemsets that contain
-lower-probability items. On Chess, Mushroom and Retail the top-$\Kk$ result is
-consequently \emph{dominated} by high-probability itemsets, so the existence-%
-probability filter ($\minprob=0.7$) is seldom the \emph{binding} constraint for
-the winning itemsets---though it remains active throughout and prunes
-lower-probability candidates. On Liquor the high-utility items span a wider
-probability range, so the probabilistic ranking and the $\EP$ filter shape the
-result more visibly. This is a property of which itemsets win the top-$\Kk$
-competition under the expected-utility ranking, not a degeneracy of the data:
-every dataset used here is genuinely uncertain.
 
+Two of the nine files are subsets. Kosarak is used as $100{,}000$ of its
+$990{,}002$ transactions and Accidents as $20{,}000$ of its $340{,}183$,
+because the full files exceed our time budget at the smallest $\Kk$.
+Sampling reduces the cost of these two proportionally: on Accidents,
+reducing the transaction count by a factor of $2.5$ reduced the
+sequential running time by a factor of $2.7$, so the subset preserves the
+shape of the problem rather than changing it.
+ 
+A tenth dataset, Pumsb ($49{,}046$ transactions, $2{,}113$ items, mean
+transaction length $74$), was probed and is reported here as not
+completing. No strategy finishes it within a $600$-second limit at
+$\Kk=10$, and sampling it to $30\%$ of its transactions does not help,
+because its cost is governed by transaction length and density rather
+than by transaction count---the mechanism that makes sampling effective
+on Accidents is absent. We report this rather than omitting the dataset:
+it is a limit of the present exact core, not of the parallelisation
+strategies, all four of which fail on it identically, and it is the
+clearest motivation for the stronger pruning structure proposed as future
+work in Section~\ref{sec:conclusion}.
+ 
 \begin{table}[t]
-\caption{Characteristics of the experimental datasets. $|T|$: transactions;
-$|I|$: distinct items; avg$|t|$, max$|t|$: average and maximum transaction length;
-Density $=$ avg$|t|/|I|$; $|I^-|$: negative-profit items; \%neg: their
-fraction.}\label{tab:datasets}
-\footnotesize\setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}lrrrrrrrl@{}}
-\toprule
-Dataset & $|T|$ & $|I|$ & avg$|t|$ & max$|t|$ & Density & $|I^-|$ & \%neg & Source \\
-\midrule
-Chess    & 3{,}196  & 75      & 37.00 & 37 & 49.33\% & 38     & 50.7\% & SPMF \\
-Mushroom & 8{,}124  & 119     & 23.00 & 23 & 19.33\% & 45     & 37.8\% & SPMF \\
-Retail   & 88{,}162 & 16{,}470 & 10.31 & 76 & 0.063\% & 8{,}247 & 50.1\% & SPMF \\
-Liquor   & 52{,}131 & 4{,}026 & 7.87  & 11 & 0.196\% & 1{,}207 & 30.0\% & SPMF \\
-\botrule
-\end{tabular}
-\end{table}
-
-\begin{table}[t]
-\caption{Profit-table statistics and the observed $\EU$ range of the top-$\Kk$
-results (over the swept $\Kk$).}\label{tab:profits}
+\caption{Characteristics of the nine benchmark datasets. $|D|$: transactions;
+$|I|$: distinct items; avg.\ len.\ and max len.: mean and maximum transaction
+length; density: mean transaction length as a percentage of $|I|$;
+negative: share of items with a negative profit.}\label{tab:datasets}
 \footnotesize\setlength{\tabcolsep}{5pt}
-\begin{tabular}{@{}lrrrr@{}}
+\begin{tabular}{@{}lrrrrrr@{}}
 \toprule
-Dataset & Profit range & Avg.\ pos. & Avg.\ neg. & $\EU$ range of top-$\Kk$ \\
+Dataset & $|D|$ & $|I|$ & Avg.\ len. & Max len. & Density (\%) & Negative (\%) \\
 \midrule
-Chess    & $[-63.0,\,+48.0]$    & $+16.22$  & $-17.05$ & $[43{,}091,\ 151{,}130]$ \\
-Mushroom & $[-60.0,\,+90.0]$    & $+18.41$  & $-17.38$ & $[61{,}761,\ 451{,}145]$ \\
-Retail   & $[-130.0,\,+130.0]$  & $+17.26$  & $-17.17$ & $[3{,}348,\ 1{,}229{,}567]$ \\
-Liquor   & $[-27.5,\,+14{,}615.0]$ & $+148.61$ & $-17.55$ & $[661,\ 560{,}291]$ \\
+Chess      & 3{,}196   & 75        & 37.00 & 37   & 49.33 & 29.3 \\
+Mushroom   & 8{,}124   & 119       & 23.00 & 23   & 19.33 & 30.3 \\
+c20d10k    & 10{,}000  & 192       & 20.00 & 20   & 10.42 & 30.2 \\
+Accidents  & 20{,}000  & 335       & 33.80 & 48   & 10.09 & 29.9 \\
+Kosarak    & 100{,}000 & 23{,}504  & 8.17  & 1828 & 0.03  & 30.0 \\
+Liquor     & 52{,}131  & 4{,}026   & 7.88  & 11   & 0.20  & 30.0 \\
+Retail     & 88{,}162  & 16{,}470  & 10.31 & 76   & 0.06  & 30.0 \\
+T10I4D100K & 100{,}000 & 870       & 10.10 & 29   & 1.16  & 30.0 \\
+t25i10d10k & 9{,}976   & 929       & 24.77 & 63   & 2.67  & 30.0 \\
 \botrule
 \end{tabular}
 \end{table}
-
+ 
+\paragraph{Utility model.}
+Benchmark files carry no profits, quantities or probabilities, so these
+are generated, and the generator is deterministic: it is driven by a
+single seed and applies the same protocol to every dataset except Liquor.
+\begin{itemize}
+\item \emph{Quantity:} $\qty(i,T)$ is drawn uniformly from $\{1,\dots,5\}$.
+\item \emph{Probability:} $\prob(i,T)=\mathrm{round}(U(0.01,0.80),2)$, so
+      probabilities lie strictly below $1$ and the certain-entry branch of
+      Algorithm~\ref{alg:join} is never taken.
+\item \emph{Profit magnitude:} $|\pr(i)|$ is resampled from the pooled
+      empirical distribution of the profit magnitudes of the Chess,
+      Mushroom and Retail profit tables. The same pooled reference is
+      used for every generated dataset, which is why their mean positive
+      profits agree to within $15\%$ in Table~\ref{tab:parameters}
+      despite describing eight different item universes.
+\item \emph{Sign:} about $30\%$ of the items ($29.3$--$30.3\%$ across
+      the datasets), chosen uniformly at random, are given a negative profit. The sign is therefore independent of
+      the magnitude, which is why the mean positive and negative profits
+      in Table~\ref{tab:parameters} are nearly symmetric.
+\end{itemize}
+Liquor is the one exception. It carries real quantities (all equal to
+$1$) and real existence probabilities (between $0.05$ and $0.58$, mean
+$0.14$), and its profits are the items' real average utilities, so its
+positive profits are large (mean $148.6$) while its negative profits,
+assigned to the $30\%$ of items of lowest utility, are small
+(mean $-17.6$). It is the only dataset whose parameters were not
+generated by the protocol above and is therefore the reference point for
+whether conclusions drawn from generated parameters carry over to
+measured ones. Table~\ref{tab:parameters} lists the resulting parameters of
+every dataset.
+ 
+\begin{table}[t]
+\caption{The utility model of each dataset: mean purchase quantity $q$, the
+range and mean of the existence probabilities, the share of items with a
+negative profit, and the mean profit of the positive and negative items. All
+rows except Liquor use the generation protocol described above and so share the
+same quantity and probability parameters by construction; Liquor carries values
+measured from real data.}\label{tab:parameters}
+\footnotesize\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+& & \multicolumn{3}{c}{Existence probability} & & \multicolumn{2}{c}{Mean profit} \\
+\cmidrule(lr){3-5} \cmidrule(lr){7-8}
+Dataset & Mean $q$ & Min & Max & Mean & Neg.\ (\%) & Positive & Negative \\
+\midrule
+Chess      & 2.99 & 0.01 & 0.80   & 0.4052 & 29.3 & 15.49  & $-19.55$ \\
+Mushroom   & 3.00 & 0.01 & 0.80   & 0.4046 & 30.3 & 17.77  & $-14.06$ \\
+c20d10k    & 3.00 & 0.01 & 0.80   & 0.4053 & 30.2 & 16.74  & $-17.38$ \\
+Accidents  & 3.00 & 0.01 & 0.80   & 0.4052 & 29.9 & 16.82  & $-15.03$ \\
+Kosarak    & 3.00 & 0.01 & 0.80   & 0.4048 & 30.0 & 17.24  & $-17.57$ \\
+Liquor     & 1.00 & 0.05 & 0.5801 & 0.1448 & 30.0 & 148.61 & $-17.55$ \\
+Retail     & 3.00 & 0.01 & 0.80   & 0.4049 & 30.0 & 17.35  & $-17.24$ \\
+T10I4D100K & 3.00 & 0.01 & 0.80   & 0.4049 & 30.0 & 17.22  & $-15.19$ \\
+t25i10d10k & 3.00 & 0.01 & 0.80   & 0.4051 & 30.0 & 16.12  & $-17.10$ \\
+\botrule
+\end{tabular}
+\end{table}
+ 
 \paragraph{Parameters.}
-Because the appropriate $\Kk$ differs by density, we sweep
-$\Kk\in\{10,20,30,40,50\}$ for Chess, $\{30,\dots,70\}$ for Mushroom,
-$\{500,\dots,900\}$ for Retail, and $\{600,\dots,1000\}$ for Liquor;
-$\minprob=0.7$ throughout. SEQ is the single-thread baseline and the parallel
-strategies are run at $\{2,4,8\}$ threads.
-
+The range of $\Kk$ is chosen per dataset from a sequential probe so that
+the running time grows by at least about a factor of two across the five
+values; on the sparse synthetic datasets a range such as $10$--$30$
+would leave the time almost flat, and the reported speedups would then
+describe the fixed loading cost rather than the mining work. Dense
+datasets need smaller $\Kk$ to remain tractable:
+$\Kk\in\{10,20,30,40,50\}$ for Chess and c20d10k,
+$\{30,\dots,70\}$ for Mushroom,
+$\{10,15,20,25,30\}$ for Accidents and Kosarak,
+$\{500,\dots,900\}$ for Liquor and Retail, and
+$\{500,875,1250,1625,2000\}$ for T10I4D100K and t25i10d10k.
+We set $\minprob=0.7$ throughout. SEQ and SEQ-REV are sequential; each
+parallel strategy is run with $1$, $2$, $4$ and $8$ threads. Running a
+strategy on one thread separates the cost of its machinery from the
+benefit of parallelism.
+ 
 \paragraph{Metrics.}
-We report wall-clock time, speedup relative to SEQ, and a \emph{work ratio}: the
-number of UPU-List joins performed by a strategy divided by that of SEQ at the
-same $(\Kk,\minprob)$. The work ratio separates algorithmic effects---how much of
-the search tree is explored, which threshold sharing changes---from raw hardware
-parallelism. Speedup is reported against the single-thread SEQ baseline so that a
-value above the thread count indicates super-linear behaviour.
-
+For each configuration we report the wall-clock time of the whole mining
+run, speedup, and the \emph{work ratio}: the number of
+list joins performed, divided by that of SEQ at the same
+$(\text{dataset},\Kk,\minprob)$. The work ratio separates algorithmic effects
+---how much of the search tree is explored, which threshold sharing and
+enumeration order both change---from hardware parallelism. Because
+speedups and work ratios are ratios, they are aggregated over $\Kk$ by
+the geometric mean, which is symmetric under inversion; an arithmetic mean
+would report $2.1\times$ for a strategy that is four times faster at one
+$\Kk$ and four times slower at another. Every parallel strategy is
+compared with the sequential baseline of its \emph{own} $(\text{dataset},\Kk)$
+cell, never with one timed in a different session.
+Since SEQ-REV (Section~\ref{subsec:seqrev}) can be faster than SEQ, we
+also report speedup relative to the faster of the two sequential
+baselines, which is the speedup a practitioner could have obtained without
+any parallelism.
+ 
 \paragraph{Hardware and software.}
 All experiments were run on a laptop with a 12th-generation Intel Core i7-12700H
 processor: a hybrid design with $6$ performance cores (each two-way simultaneously
 multithreaded) and $8$ efficiency cores, for $14$ physical cores and $20$ hardware
 threads in total, at a $2.70$\,GHz base frequency. The machine has $16$\,GB of RAM
-($15.7$\,GB usable) and runs $64$-bit Windows~11. The implementation targets the
-Java Virtual Machine (OpenJDK~17); no GPU was used. Because we evaluate $\{2,4,8\}$
-software threads, the work-stealing and thread-pool schedulers map onto the
-performance cores first and then the efficiency cores; the hybrid topology and
-laptop thermal envelope are noted as threats to validity
+($15.7$\,GB usable) and runs $64$-bit Windows~11. The implementation targets the Java Virtual Machine (OpenJDK~25,
+Eclipse Temurin, HotSpot 64-bit Server VM); no GPU was used. With at most eight
+software threads the schedulers use the performance cores first; the hybrid
+topology and laptop thermal envelope are discussed as threats to validity
 (Section~\ref{sec:discussion}).
-
+ 
 \paragraph{Protocol.}
-Each $(\text{algorithm},\Kk,\minprob,\text{threads})$ configuration was executed
-three times after a warm-up run to allow just-in-time compilation and heap
-stabilisation, and we report the \emph{median} of the three timed runs. Run-to-run
-variation was low: the median coefficient of variation across all configurations
-was $1.8\%$ (mean $3.4\%$). The work-stealing strategy~FJ, whose stealing order is
-nondeterministic, exhibited the largest variance (coefficient of variation up to
-$\approx\!26\%$ on Liquor and $\approx\!12\%$ on Chess at eight threads); reporting
-medians rather than means controls for these outliers. All strategies are exact:
-at every configuration they returned the same top-$\Kk$ set as SEQ, so timing
-differences reflect only the parallelisation strategy and not result quality.
+Each $(\text{algorithm},\Kk,\minprob,\text{threads})$ configuration is run
+after at least one discarded warm-up repetition, so that the just-in-time
+compiler has reached steady state before any time is recorded, and the
+harness reports the mean and the sample standard deviation of the timed
+repetitions. Retail and Accidents use three timed repetitions per
+configuration, because a single repetition takes up to about a minute;
+all other datasets use five.
 
+All strategies are exact: in every configuration their top-$\Kk$ set was
+compared with SEQ's, by itemset and by $\EU$ to six decimals, and no
+disagreement occurred.
+ 
+Two safeguards protect the timings. First, every strategy on one thread
+performs exactly the work of SEQ (TPB, PLM and PC) or SEQ-REV (FJ), so
+their join counts must coincide and their times must agree; a cell where
+they do not is one in which the machine changed speed during the
+measurement, and the speedups in it are divided by a baseline taken under
+different conditions. Such cells are detected automatically, re-run and
+replaced, and in the final data every cell passes this control. Second,
+the work-stealing strategy FJ is not deterministic: which worker finds a
+good itemset first changes the threshold's trajectory, so its join count
+and its time vary between repetitions, with coefficients of variation that exceed $10\%$ in $48$ of the $810$
+measured configurations and reach $36\%$, while SEQ and SEQ-REV stay at
+or below $6\%$. We therefore report the standard deviation alongside every mean
+and treat differences between strategies smaller than that spread as
+inconclusive.
+
+Across all $810$ measured configurations the median coefficient of
+variation is $0.57\%$ and the mean $2.03\%$, so the reported means are
+stable at the repetition counts used; the $48$ configurations that exceed
+$10\%$ are all fork--join rows, for the reason discussed in
+Section~\ref{sec:discussion}.
+
+\FloatBarrier
 \section{Results}\label{sec:results}
-Across all datasets and configurations every strategy returned exactly $\Kk$
-patterns identical to SEQ, consistent with Theorem~\ref{thm:correct}. We focus on
-performance.
+ 
+Every configuration returned the same top-$\Kk$ set as SEQ: across
+$765$ completed runs, each compared with its sequential reference by
+itemset and by $\EU$ to six decimals, there was no disagreement. The
+strategies therefore differ only in how long they take and how much of
+the search tree they visit, which is what the rest of this section
+examines.
+ 
+We report four things in turn: how the strategies scale with the thread
+count; where the work they save or waste actually comes from; what
+sharing the admission threshold is worth once that question is isolated;
+and which strategy a practitioner should choose.
+ 
+% ---------------------------------------------------------------------
+% Source: analysis/tables/table_scaling.tex
+% ---------------------------------------------------------------------
+\subsection{Scaling}\label{subsec:scaling}
+ 
+Table~\ref{tab:scaling} gives the speedup of each strategy at one, two,
+four and eight threads, as a geometric mean over the five $\Kk$ values of
+each dataset, and Figure~\ref{fig:scaling} plots the same data.
 
-Table~\ref{tab:summary} reports speedup and work ratio at eight threads for the
-largest $\Kk$ of each dataset. Figure~\ref{fig:speedup} shows speedup versus $\Kk$
-(all $\Kk$ values) at eight threads, and Figure~\ref{fig:workratio} shows the work
-ratio versus $\Kk$.
-
-\begin{table}[t]
-\caption{Speedup ($s$) and work ratio ($w$) at 8 threads, largest $\Kk$ per
-dataset. Work ratio $<1$ means a strategy performs less work than SEQ.}\label{tab:summary}
-\begin{tabular}{@{}llrcccc@{}}
+ 
+\begin{table}[p]
+\centering
+\caption{Speedup over the sequential baseline at each thread count, as a geometric mean over the $k$ values of each dataset.}
+\label{tab:scaling}
+\begin{tabular}{llrrrr}
 \toprule
-Dataset & $\Kk$ & SEQ (ms) & FJ ($s$/$w$) & TPB ($s$/$w$) & PC ($s$/$w$) & PLM ($s$/$w$) \\
+& & \multicolumn{4}{c}{Threads} \\
+\cmidrule(lr){3-6}
+Dataset & Strategy & 1 & 2 & 4 & 8 \\
 \midrule
-Chess    & 50   & 69509 & \textbf{27.5}/0.11 & 4.7/1.19 & 4.7/1.23 & 0.7/7.92 \\
-Mushroom & 70   & 7841  & \textbf{10.0}/0.44 & 8.4/0.52 & 8.6/0.54 & 0.9/4.28 \\
-Liquor   & 1000 & 8499  & 2.4/1.19 & 3.1/1.09 & \textbf{3.9}/1.07 & 2.4/1.66 \\
-Retail   & 900  & 87442 & 2.2/1.18 & 2.7/1.11 & \textbf{3.4}/1.12 & 0.6/8.95 \\
+Chess & Fork/Join & 1.96 & 3.79 & 4.94 & 7.17 \\
+ & Thread pool & 1.00 & 1.95 & 3.08 & 5.42 \\
+ & Producer-consumer & 1.00 & 1.98 & 3.30 & 5.98 \\
+ & Partition-local & 1.01 & 1.29 & 1.65 & 1.77 \\
+\addlinespace
+Mushroom & Fork/Join & 1.16 & 2.00 & 2.67 & 3.73 \\
+ & Thread pool & 1.00 & 1.80 & 2.46 & 3.40 \\
+ & Producer-consumer & 0.99 & 1.92 & 2.87 & 3.60 \\
+ & Partition-local & 1.01 & 1.32 & 1.55 & 1.64 \\
+\addlinespace
+c20d10k & Fork/Join & 0.84 & 1.53 & 2.24 & 3.11 \\
+ & Thread pool & 1.00 & 1.91 & 2.68 & 3.22 \\
+ & Producer-consumer & 1.01 & 2.11 & 3.20 & 3.34 \\
+ & Partition-local & 1.01 & 1.29 & 1.64 & 1.77 \\
+\addlinespace
+Accidents & Fork/Join & 1.35 & 2.45 & 2.78 & 4.17 \\
+ & Thread pool & 1.00 & 2.04 & 3.14 & 4.72 \\
+ & Producer-consumer & 1.00 & 2.16 & 3.75 & 5.16 \\
+ & Partition-local & 1.00 & 1.39 & 1.96 & 2.41 \\
+\addlinespace
+Kosarak & Fork/Join & 0.53 & 1.00 & 1.53 & 2.01 \\
+ & Thread pool & 1.00 & 1.93 & 2.88 & 4.02 \\
+ & Producer-consumer & 1.00 & 2.02 & 3.94 & 5.10 \\
+ & Partition-local & 0.99 & 1.32 & 1.90 & 2.69 \\
+\addlinespace
+Liquor & Fork/Join & 0.83 & 1.42 & 1.85 & 2.74 \\
+ & Thread pool & 0.99 & 1.72 & 2.60 & 3.30 \\
+ & Producer-consumer & 1.00 & 1.94 & 3.64 & 4.08 \\
+ & Partition-local & 1.00 & 1.54 & 2.15 & 2.55 \\
+\addlinespace
+Retail & Fork/Join & 0.88 & 1.65 & 2.07 & 2.55 \\
+ & Thread pool & 0.99 & 1.82 & 2.48 & 2.96 \\
+ & Producer-consumer & 0.99 & 2.05 & 3.66 & 3.36 \\
+ & Partition-local & 0.99 & 1.67 & 2.22 & 2.66 \\
+\addlinespace
+T10I4D100K & Fork/Join & 1.20 & 2.31 & 3.47 & 6.00 \\
+ & Thread pool & 1.00 & 1.94 & 3.74 & 6.00 \\
+ & Producer-consumer & 1.00 & 1.96 & 3.86 & 6.35 \\
+ & Partition-local & 1.00 & 1.49 & 2.12 & 2.75 \\
+\addlinespace
+t25i10d10k & Fork/Join & 1.04 & 2.09 & 3.22 & 5.65 \\
+ & Thread pool & 0.99 & 1.96 & 3.77 & 6.15 \\
+ & Producer-consumer & 1.00 & 1.98 & 3.90 & 6.64 \\
+ & Partition-local & 1.00 & 1.60 & 2.37 & 3.27 \\
+\bottomrule
+\end{tabular}
+\end{table}
+ 
+Three observations follow immediately. First, \emph{no configuration is
+super-linear}: the largest speedup anywhere is $7.17\times$ on eight
+threads (FJ on Chess), and the median over the $36$ strategy--dataset pairs at eight threads is $3.4\times$. A previous version of this work reported a
+super-linear figure; Section~\ref{subsec:order} explains where that came
+from and why the present measurements do not reproduce it.
+ 
+Second, the three threshold-sharing strategies scale smoothly, while the
+non-sharing strategy flattens early. PC reaches between $3.3\times$ and
+$6.6\times$ at eight threads depending on the dataset; PLM reaches
+between $1.6\times$ and $3.3\times$ and gains little beyond four threads,
+because each additional partition is one more worker pruning against a
+threshold of its own.
+ 
+Third, and most informative, the one-thread column is not uniformly
+$1.00$. TPB, PC and PLM sit at $0.99$--$1.01$ everywhere, as they must:
+on one thread each performs exactly SEQ's traversal, so any deviation
+would indicate a measurement problem rather than an algorithmic one, and
+this is the control described in Section~\ref{sec:setup}. FJ, by
+contrast, ranges from $0.53$ on Kosarak to $1.96$ on Chess. A strategy
+that has not yet been given a second thread cannot have benefited from
+parallelism, so whatever produces that spread is not parallelism. The
+next subsection identifies it.
+ 
+% ---------------------------------------------------------------------
+% Source: analysis/tables/table_traversal.tex and table_scaling.tex
+% ---------------------------------------------------------------------
+\subsection{Where the work goes: the enumeration-order control}\label{subsec:order}
+ 
+Table~\ref{tab:order} places the reverse-order control of
+Section~\ref{subsec:seqrev} beside FJ's one-thread behaviour. SEQ-REV is
+a purely sequential miner that differs from SEQ in the direction of one
+loop; FJ at one thread is a work-stealing scheduler with a single
+worker. They share no code path and were measured independently.
+ 
+\begin{table}[t]
+\caption{The enumeration-order control against fork--join on one thread.
+Columns 2 and 3 describe SEQ-REV, a sequential miner; columns 4 and 5
+describe FJ, a work-stealing scheduler. All values are geometric means
+over the $\Kk$ values of each dataset.}\label{tab:order}
+\footnotesize\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{SEQ-REV (sequential)} & \multicolumn{2}{c}{FJ} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Dataset & Work vs SEQ & Implied speedup & Speedup @1 thread & Work @8 threads \\
+\midrule
+Chess      & 0.53 & 2.00 & 1.96 & 0.603 \\
+Mushroom   & 1.07 & 1.15 & 1.16 & 1.055 \\
+c20d10k    & 1.55 & 0.84 & 0.84 & 1.346 \\
+Accidents  & 0.79 & 1.35 & 1.35 & 0.824 \\
+Kosarak    & 2.34 & 0.52 & 0.53 & 2.251 \\
+Liquor     & 1.33 & 0.83 & 0.83 & 1.252 \\
+Retail     & 1.17 & 0.88 & 0.88 & 1.157 \\
+T10I4D100K & 0.78 & 1.20 & 1.20 & 0.849 \\
+t25i10d10k & 1.01 & 1.04 & 1.04 & 0.963 \\
+\botrule
+\end{tabular}
+\vspace{2pt}
+ 
+{\footnotesize ``Implied speedup'' is the reciprocal of SEQ-REV's time
+relative to SEQ, that is, the speedup a sequential miner obtains from the
+reversed order alone. ``Work @8 threads'' is FJ's join count relative to
+SEQ at eight threads, for comparison with SEQ-REV's at one.}
+\end{table}
+ 
+Columns 3 and 4 agree to two decimal places on eight of the nine
+datasets and to within $2\%$ on the ninth. The underlying identity is
+exact: at every $(\text{dataset},\Kk)$ cell, FJ on one thread attempts
+precisely the number of joins SEQ-REV attempts, to the digit. The small
+residual in the times is scheduling overhead, and on Kosarak at
+$\Kk=30$ it runs the other way---FJ is $4\%$ faster than the control it
+reproduces. FJ on
+one thread is not merely similar to the sequential control: within the
+resolution of the measurement it \emph{is} the sequential control. The
+work-stealing machinery contributes nothing that the reversed loop does
+not already contribute, and the entire spread of FJ's one-thread column
+in Table~\ref{tab:scaling}---from $0.53$ to $1.96$---is an artefact of
+which order its task decomposition happens to impose.
+ 
+Column 5 extends the point to the parallel case. FJ's work ratio at
+eight threads tracks SEQ-REV's at one across the whole range, from
+$0.603$ against $0.53$ on Chess to $2.251$ against $2.34$ on Kosarak.
+Adding seven workers to FJ changes how much of the tree it explores
+hardly at all. Whatever FJ gains from eight threads it gains from
+hardware, not from its workers informing one another.
+ 
+The reversed order is not an improvement to be adopted. It is a gamble.
+It reduces work on three datasets (Chess, T10I4D100K, Accidents), leaves
+it unchanged on two (t25i10d10k, Mushroom), and increases it on four,
+reaching $2.34\times$ the sequential work on Kosarak. FJ inherits the
+loss exactly as readily as the win, which is why its speedup on Kosarak
+is $2.01\times$ while a strategy that commits to no particular order
+reaches $5.10\times$ on the same data.
+ 
+This also explains the super-linear figure reported previously. That
+measurement was taken on Chess, the dataset where the reversed order
+helps most, with an experimental harness that did not discard warm-up
+repetitions, so a sequential baseline inflated by just-in-time
+compilation was divided into a parallel time that was not. The
+order effect and the measurement artefact compounded. Neither survives
+once the baseline is measured at steady state and the order is
+controlled for.
+ 
+% ---------------------------------------------------------------------
+% Source: analysis/tables/table_main.tex, work-ratio column
+% ---------------------------------------------------------------------
+\subsection{What threshold sharing is worth}\label{subsec:sharing}
+ 
+The question the paper set out to answer requires a comparison in which
+nothing but the threshold changes. TPB and PLM provide it: identical
+prefix distribution, identical growth procedure, identical starting
+threshold, differing only in whether the collector is shared
+(Section~\ref{subsec:parallel}). Table~\ref{tab:sharing} reports their
+work ratios at eight threads.
+ 
+\begin{table}[t]
+\caption{What sharing the admission threshold saves. TPB and PLM differ
+in one respect only---whether the collector is shared---so the ratio of
+their work ratios isolates the effect of sharing, with load balancing
+held fixed. Eight threads, geometric means over $\Kk$.}\label{tab:sharing}
+\footnotesize\setlength{\tabcolsep}{6pt}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Dataset & Density (\%) & TPB (shared) & PLM (local) & Saving \\
+\midrule
+Chess      & 49.33 & 0.795 & 2.393 & $3.01\times$ \\
+Mushroom   & 19.33 & 1.135 & 3.149 & $2.77\times$ \\
+c20d10k    & 10.42 & 1.159 & 2.665 & $2.30\times$ \\
+Accidents  & 10.09 & 0.876 & 1.518 & $1.73\times$ \\
+t25i10d10k & 2.67  & 0.960 & 2.037 & $2.12\times$ \\
+T10I4D100K & 1.16  & 0.979 & 2.940 & $3.00\times$ \\
+Liquor     & 0.20  & 1.088 & 1.574 & $1.45\times$ \\
+Retail     & 0.06  & 1.081 & 1.208 & $1.12\times$ \\
+Kosarak    & 0.03  & 1.097 & 2.121 & $1.93\times$ \\
 \botrule
 \end{tabular}
 \end{table}
-
+ 
+Sharing pays on every dataset, by a factor between $1.12\times$ and
+$3.01\times$. This is the one effect in the study that never changes
+sign. It is also the effect that the parallel HUIM literature forgoes:
+the partition-local pattern that PLM embodies is the one used by the
+distributed frameworks of Section~\ref{sec:related}, which cannot
+maintain an exact shared threshold across nodes and therefore pay this
+cost by construction.
+ 
+The size of the saving is not predicted by density. The rows of
+Table~\ref{tab:sharing} are ordered by density and the saving does not
+follow: T10I4D100K, at $1.16\%$ density, saves as much as Chess at
+$49.33\%$, while Retail and Liquor, the two sparsest datasets after Kosarak, save
+the least ($1.12\times$ and $1.45\times$) and Kosarak itself---sparser
+than both---saves $1.93\times$. Whatever governs the magnitude, the structural
+statistics in Table~\ref{tab:datasets} do not capture it.
+ 
+% ---------------------------------------------------------------------
+% Source: analysis/tables/table_main.tex
+% ---------------------------------------------------------------------
+\subsection{Choosing a strategy}\label{subsec:choice}
+ 
+Table~\ref{tab:main} gives time, speedup and work ratio for all four
+strategies at eight threads.
+ 
+PC is the best strategy on seven of the nine datasets and is within
+$3.5\%$ of the best on an eighth (Mushroom). Its work ratio stays within
+$1.05$--$1.18$ everywhere: it neither saves work nor wastes it, because
+it imposes no traversal order of its own---its consumers take prefixes
+in sequential order---and it shares the threshold. It is, in the sense
+R2 asked us to make precise, the \emph{robust} choice: not the fastest
+in every case, but the one whose worst case is mildest, and the only
+strategy whose behaviour does not depend on a property of the data that
+cannot be read off in advance.
+ 
+Chess is the single dataset where another strategy wins by a margin that
+matters: FJ reaches $7.17\times$ against PC's $5.98\times$. That is
+exactly the dataset where the reversed enumeration order helps most
+(Table~\ref{tab:order}, work ratio $0.53$). On Mushroom FJ wins by
+$3.5\%$, which is inside the run-to-run spread of FJ itself and should
+not be read as a difference.
+ 
+TPB trails PC consistently but never badly, by $4$--$27\%$. The two share
+the threshold and differ only in load balancing, so the gap measures what
+demand-driven assignment is worth over a static round-robin: real, but an
+order of magnitude smaller than what sharing the threshold is worth.
+ 
+PLM is the weakest strategy on seven of the nine datasets, reaching
+$1.64$--$3.27\times$ where producer--consumer reaches
+$3.3$--$6.6\times$. It is never slower than sequential execution. We
+note this explicitly because an earlier version of this work reported
+that it was: in that version the partition-local collectors started
+empty while the shared collectors started seeded with the valid
+$1$-itemsets, so part of the measured penalty was a handicap imposed by
+the implementation rather than by the absence of sharing. With both
+started identically (Algorithm~\ref{alg:plm}), the penalty is smaller
+and entirely attributable to the mechanism under study.
+ 
+On Kosarak and Retail the weakest strategy is not PLM but FJ
+($2.01\times$ against PLM's $2.69\times$, and $2.55\times$ against
+$2.66\times$). These are the two datasets on which the reversed
+enumeration order costs the most work (Table~\ref{tab:order}), and they
+make the paper's central point in its sharpest form: a scheduler that
+shares the admission threshold but inherits an unlucky traversal order
+can finish behind one that shares nothing and traverses in the
+sequential order. Threshold sharing is worth between $1.12\times$ and
+$3.01\times$ of the exploration; the order is worth between
+$0.53\times$ and $2.34\times$ in either direction, and when it goes
+against a scheduler it can outweigh everything sharing buys.
+ 
+\begin{table}[p]
+\centering
+\caption{Performance at the highest thread count. Times are the mean of the measured repetitions; speedup and work ratio are geometric means over the $k$ values of each dataset. Work ratio is the number of join attempts relative to the sequential baseline, so values above one mean the strategy explored more of the search space than was necessary.}
+\label{tab:main}
+\begin{tabular}{llrrr}
+\toprule
+Dataset & Strategy & Mean time (ms) & Speedup & Work ratio \\
+\midrule
+Chess & Fork/Join & 1867 & 7.17$\times$ & 0.603 \\
+ & Thread pool & 2549 & 5.42$\times$ & 0.795 \\
+ & Producer-consumer & 2339 & 5.98$\times$ & 0.809 \\
+ & Partition-local & 8604 & 1.77$\times$ & 2.393 \\
+\addlinespace
+Mushroom & Fork/Join & 807 & 3.73$\times$ & 1.055 \\
+ & Thread pool & 892 & 3.40$\times$ & 1.135 \\
+ & Producer-consumer & 842 & 3.60$\times$ & 1.139 \\
+ & Partition-local & 1920 & 1.64$\times$ & 3.149 \\
+\addlinespace
+c20d10k & Fork/Join & 590 & 3.11$\times$ & 1.346 \\
+ & Thread pool & 581 & 3.22$\times$ & 1.159 \\
+ & Producer-consumer & 561 & 3.34$\times$ & 1.179 \\
+ & Partition-local & 1138 & 1.77$\times$ & 2.665 \\
+\addlinespace
+Accidents & Fork/Join & 12085 & 4.17$\times$ & 0.824 \\
+ & Thread pool & 10671 & 4.72$\times$ & 0.876 \\
+ & Producer-consumer & 9796 & 5.16$\times$ & 0.883 \\
+ & Partition-local & 23182 & 2.41$\times$ & 1.518 \\
+\addlinespace
+Kosarak & Fork/Join & 58464 & 2.01$\times$ & 2.251 \\
+ & Thread pool & 26486 & 4.02$\times$ & 1.097 \\
+ & Producer-consumer & 20624 & 5.10$\times$ & 1.094 \\
+ & Partition-local & 44027 & 2.69$\times$ & 2.121 \\
+\addlinespace
+Liquor & Fork/Join & 2355 & 2.74$\times$ & 1.252 \\
+ & Thread pool & 1960 & 3.30$\times$ & 1.088 \\
+ & Producer-consumer & 1587 & 4.08$\times$ & 1.074 \\
+ & Partition-local & 2533 & 2.55$\times$ & 1.574 \\
+\addlinespace
+Retail & Fork/Join & 29951 & 2.55$\times$ & 1.157 \\
+ & Thread pool & 25714 & 2.96$\times$ & 1.081 \\
+ & Producer-consumer & 22697 & 3.36$\times$ & 1.098 \\
+ & Partition-local & 28737 & 2.66$\times$ & 1.208 \\
+\addlinespace
+T10I4D100K & Fork/Join & 5482 & 6.00$\times$ & 0.849 \\
+ & Thread pool & 5475 & 6.00$\times$ & 0.979 \\
+ & Producer-consumer & 5176 & 6.35$\times$ & 0.986 \\
+ & Partition-local & 12531 & 2.75$\times$ & 2.940 \\
+\addlinespace
+t25i10d10k & Fork/Join & 4637 & 5.65$\times$ & 0.963 \\
+ & Thread pool & 4301 & 6.15$\times$ & 0.960 \\
+ & Producer-consumer & 3986 & 6.64$\times$ & 0.965 \\
+ & Partition-local & 8103 & 3.27$\times$ & 2.037 \\
+\bottomrule
+\end{tabular}
+\end{table}
+ 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{fig_speedup.pdf}
-\caption{Speedup over SEQ versus $\Kk$ at eight threads, for all $\Kk$ values per
-dataset. The dotted line marks eight-way (linear) speedup, the dashed line marks
-parity with SEQ. FJ is super-linear on the dense datasets and its advantage grows
-with $\Kk$, but it is sub-linear on the sparse datasets, where PC scales best.}\label{fig:speedup}
+\includegraphics[width=\linewidth]{fig_scaling.pdf}
+\caption{Speedup over the sequential baseline against thread count, one
+panel per dataset, as a geometric mean over the $\Kk$ values. The dotted
+line marks parity with SEQ.}\label{fig:scaling}
 \end{figure}
-
+ 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{fig_workratio.pdf}
-\caption{Work ratio (joins relative to SEQ, log scale) versus $\Kk$ at eight
-threads. Values below the dashed line ($=1$) mean less work than sequential. FJ
-falls well below $1$ on dense data and rises above $1$ on sparse data; PLM is
-always highest.}\label{fig:workratio}
+\caption{Work ratio---joins relative to the sequential baseline---against
+thread count. Values above the dotted line mean a strategy explored more
+of the tree than SEQ did. PLM rises with every added thread; the sharing
+strategies stay near one.}\label{fig:workratio}
+\end{figure}
+ 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{fig_traversal.pdf}
+\caption{The enumeration-order effect alone: work performed by SEQ-REV
+relative to SEQ, against $\Kk$, on one thread. Below one the reversed
+order paid for itself; above one it cost more than it saved. Both
+outcomes occur, and neither is predicted by the density of the
+dataset.}\label{fig:traversal}
 \end{figure}
 
-\paragraph{Dense data (Chess, Mushroom).} FJ's work ratio falls far below one
-(to $0.11$ on Chess at $\Kk=50$), i.e.\ cooperative threshold escalation prunes
-roughly nine tenths of the sequential work. Combined with eight-way hardware
-parallelism this yields \emph{super-linear} speedup, up to $27.5\times$ on eight
-threads. TPB and PC also scale well ($\approx4.7\times$ on Chess,
-$\approx8.5\times$ on Mushroom) but with higher work ratios than FJ
-($\approx1.2$ on Chess, $\approx0.5$ on Mushroom), so they capture less of the
-cooperative-pruning windfall.
 
-\paragraph{Sparse data (Liquor, Retail).} Here FJ's work ratio exceeds one
-($1.13$--$1.32$ over the sweep): the threshold rises slowly, so parallel branches
-explore redundantly before pruning takes effect, and FJ's speedup collapses to
-$\approx2.2$--$2.8\times$. The producer--consumer strategy PC is the most robust,
-reaching $\approx3.4$--$4.0\times$ with a work ratio near one.
+\subsection{Base-case validation against an external exact miner}
+\label{subsec:basecase}
+ 
+The experiments above compare our parallel strategies against our own
+sequential baseline. That establishes internal consistency but not
+external correctness: if the shared core were wrong, every strategy
+would be wrong in the same way and the comparison would not reveal it.
+This subsection closes that gap, and at the same time quantifies what
+the generality of the PPNHUI model costs relative to a specialised
+classical miner.
+ 
+\paragraph{Reduction to the classical case.}
+Our problem degenerates to classical HUIM under two restrictions. If no
+item carries a negative profit, then $\uu(\itemset,T)\ge 0$ for every
+transaction, and if every existence probability equals $1$, then
+$\mathrm{P}(\itemset,T)=1$ for all $\itemset\subseteq T$. Substituting
+into Definition~\ref{def:prob} gives $\EU(\itemset)=\sum_{T\supseteq
+\itemset}\uu(\itemset,T)$, the ordinary utility, and $\EP(\itemset)=1$
+for every non-empty itemset, so the $\EP$ filter never binds.
+Equation~\eqref{eq:ptwurem} reduces $\PTWU$ to the classical
+transaction-weighted utilisation and Eq.~\eqref{eq:pub} reduces $\PUB$
+to the remaining-utility bound of HUI-Miner~\cite{liu2012huiminer}. The
+mining core is unchanged; only the data makes the probabilistic and
+negative-profit machinery inert. We additionally replace the top-$\Kk$
+collector by the fixed admission threshold of
+Problem~\ref{prob:minutil}, which Theorem~\ref{thm:correct} already
+covers as the case $\tau=\mu$. In this configuration the problem solved
+is exactly the one EFIM solves, so the two programs must return the same
+answer.
+ 
+\paragraph{Data and protocol.}
+We derive two base-case datasets from the benchmarks of
+Table~\ref{tab:datasets}: \textsc{RetailBase} ($88{,}162$ transactions,
+total utility $46{,}001{,}038$) and \textsc{T10Base} ($100{,}000$
+transactions, $870$ distinct items, total utility $53{,}783{,}150$),
+generated with all profits positive and all existence probabilities set
+to~$1$. Each is converted to the SPMF utility format and the conversion
+is verified by round-trip: every transaction is re-parsed and every
+declared transaction utility is re-derived from its per-item utilities.
+Five minimum-utility thresholds per dataset were chosen to span roughly
+an order of magnitude in the number of answers. Because each SPMF
+invocation starts a fresh JVM, we ran our miner the same way---three
+separate single-run JVM invocations per threshold rather than three
+timed runs inside one JVM---so that neither side benefits from a
+just-in-time warm-up the other does not get, and we report medians. This
+differs deliberately from the protocol of Section~\ref{sec:setup},
+where discarded warm-up repetitions are the correct choice because every
+strategy being compared runs on the same JVM; here the comparison
+crosses process boundaries, and symmetry between the two programs
+matters more than steady state. The protocol is not cosmetic: on
+\textsc{RetailBase} the first invocation was consistently $11\%$ slower
+than the second and third, an operating-system page-cache effect that a
+single run would have silently reported as the result.
+ 
+\paragraph{Correctness.}
+At the lowest and highest threshold of each dataset we compared the two
+outputs itemset by itemset. All four comparisons agree exactly: the same
+number of itemsets ($1013$ and $99$ on \textsc{RetailBase}; $1011$ and
+$98$ on \textsc{T10Base}), the same itemsets, and the same utility for
+every itemset to within floating-point tolerance. No itemset was found
+by one program and missed by the other. Agreement with an independently
+written exact miner is a considerably stronger correctness statement
+than agreement with our own sequential baseline, because the two
+implementations share no code, no data structure and no author.
+ 
+\paragraph{The cost of generality.}
+Table~\ref{tab:basecase} reports the comparison. Our miner is faster at
+every threshold on both datasets, by $1.5$--$6.9\times$ on
+\textsc{RetailBase} and $7.4$--$16.6\times$ on \textsc{T10Base}, using
+one thread against EFIM's one thread. The cost of carrying the
+probabilistic and positive--negative machinery through the base case is
+therefore not merely small but negative: the generalised core is faster
+than a specialised classical miner even on the classical miner's own
+problem.
+ 
+The shape of the comparison is more informative than its magnitude.
+EFIM's runtime is almost flat in the threshold---on \textsc{T10Base} it
+varies by $3\%$ across a range over which the number of answers falls by
+a factor of ten---whereas ours falls by $2.2\times$ on the same range.
+EFIM projects and rescans the database at each node of its search, so
+its cost is dominated by a term that the threshold barely influences;
+the UPU-List pays its scanning cost once, during Phase~1, after which
+pruning translates directly into work not done. The advantage is thus
+structural rather than a constant factor of implementation, and it
+widens as the threshold rises.
+ 
+\begin{table}[t]
+\caption{Base case: our sequential miner against EFIM~\cite{zida2017efim}
+as distributed in SPMF, on identical data at identical thresholds. Both
+are exact and both are single-threaded; each figure is the median of
+three separate JVM invocations. $|\mathcal{H}|$ is the number of
+high-utility itemsets, which the two programs agree on exactly.}
+\label{tab:basecase}
+\footnotesize\setlength{\tabcolsep}{6pt}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Dataset & minUtil & $|\mathcal{H}|$ & Ours (ms) & EFIM (ms) & Ratio \\
+\midrule
+\textsc{RetailBase}
+  & $33{,}000$  & $1013$ & $81{,}326$ & $121{,}677$ & $1.50\times$ \\
+  & $45{,}000$  & $610$  & $55{,}562$ & $113{,}795$ & $2.05\times$ \\
+  & $61{,}000$  & $352$  & $36{,}956$ & $107{,}893$ & $2.92\times$ \\
+  & $83{,}000$  & $186$  & $22{,}885$ & $101{,}195$ & $4.42\times$ \\
+  & $112{,}000$ & $99$   & $13{,}807$ & $95{,}184$  & $6.89\times$ \\
+\midrule
+\textsc{T10Base}
+  & $107{,}000$ & $1011$ & $15{,}293$ & $113{,}535$ & $7.42\times$ \\
+  & $122{,}000$ & $665$  & $12{,}544$ & $111{,}492$ & $8.89\times$ \\
+  & $140{,}000$ & $348$  & $10{,}251$ & $111{,}122$ & $10.84\times$ \\
+  & $160{,}000$ & $176$  & $8{,}426$  & $110{,}043$ & $13.06\times$ \\
+  & $183{,}000$ & $98$   & $6{,}831$  & $113{,}326$ & $16.59\times$ \\
+\botrule
+\end{tabular}
+\end{table}
+ 
+\paragraph{What the base case reveals about top-$\Kk$.}
+\label{par:minutilworkratio}
+Running the parallel strategies in this fixed-threshold mode produces a
+result that bears directly on the scope of this paper's claims. Across
+every configuration of both base-case datasets---five thresholds,
+$\{1,2,4,8\}$ threads, SEQ-REV, PC and PLM---the work ratio is
+\emph{exactly} $1.000$. Neither reversing the traversal order nor
+withholding the global threshold from the workers changes the number of
+joins by a single one.
+ 
+This is the expected behaviour, and it is worth stating explicitly
+because it delimits the contribution. Both mechanisms studied in this
+paper act through the \emph{admission threshold}. When $\tau$ is supplied
+in advance, sharing it is vacuous---every worker already holds the final
+value from the outset---and enumeration order cannot matter either,
+because whether a node is pruned depends only on its own bounds against
+a constant, not on what has been discovered before it. PLM's penalty and
+fork--join's order effect therefore both vanish, leaving only raw
+parallelism: on \textsc{T10Base} at eight threads PC reaches
+$5.5$--$5.9\times$ and PLM $4.8$--$5.3\times$, the gap between them now
+attributable solely to PC's dynamic queue against PLM's static
+partitioning and end-of-run merge.
+ 
+The two effects analysed in Sections~\ref{sec:results}
+and~\ref{sec:discussion}---what threshold sharing saves, and what
+enumeration order costs or saves---are therefore specific to top-$\Kk$
+mining rather than general properties of parallel HUIM. A practitioner
+mining at a supplied threshold should choose a strategy on
+load-balancing grounds alone, and for that reader the work-ratio metric
+carries no information at all: it is identically one.
 
-\paragraph{The non-sharing strategy.} PLM is the worst strategy in every regime,
-and on Chess, Mushroom and Retail it runs \emph{slower than sequential}. Its work
-ratio climbs steeply as $\Kk$ shrinks: on Chess it reaches $\approx80\times$ the
-sequential work at $\Kk=10$ (Figure~\ref{fig:workratio}), so PLM can be more than
-$10\times$ slower than SEQ (speedup as low as $0.07\times$); even at the largest
-$\Kk$ it still does $4$--$9\times$ the work (speedup $0.6$--$0.9\times$). The penalty
-tracks how much pruning the shared threshold enables---largest where sharing
-matters most, and smallest on Liquor, where PLM stays near a $2\times$ speedup.
-
+\FloatBarrier
 \section{Discussion}\label{sec:discussion}
-The work-ratio metric explains the whole spectrum. The benefit of sharing the
-admission threshold is proportional to how quickly that threshold rises. On dense
-data a few high-utility itemsets are found early, $\tau$ rises sharply, and a
-strategy that propagates $\tau$ aggressively (FJ with work-stealing) converts
-this into a large reduction in explored nodes---enough to make speedup
-super-linear. On sparse data the utility landscape is flatter, $\tau$ rises
-slowly, sharing buys little, and FJ's eager parallel splitting instead creates
-redundant work; the more measured scheduling of PC then wins. PLM, which never
-shares, forfeits whatever pruning the global threshold would have provided, so it
-is worst everywhere and worst of all where that pruning is largest.
+ 
+\paragraph{Two mechanisms, only one of them dependable.}
+The study separates two ways in which a parallel top-$\Kk$ miner can
+explore less of the tree than a sequential one. Sharing the admission
+threshold lets a discovery by one worker prune another's branch, and it
+saves between $1.12\times$ and $3.01\times$ of the work on every dataset
+we measured. Visiting the top-level prefixes in a different order raises
+the threshold earlier or later, and it changes the work by a factor
+between $0.53\times$ and $2.34\times$---in either direction. The first
+mechanism is a property of the algorithm; the second is a property of
+the data, and a scheduler that fixes a traversal order is betting on it.
+ 
+Fork--join makes that bet without meaning to. Its order is not a design
+choice but a by-product of forking the left half of a range and
+computing the right, and Table~\ref{tab:order} shows that the bet
+accounts for all of its pruning behaviour. A reader who sees fork--join
+do less work than the baseline and concludes that work stealing enabled
+cooperation would be drawing the wrong lesson from the right number.
+ 
+\paragraph{Density does not predict the regime.}
+An earlier version of this work organised its findings around a
+density-driven regime spectrum. The nine-dataset suite refutes that
+organisation, and does so by a matched pair rather than by a weak
+correlation. c20d10k and Accidents have densities of $10.42\%$ and
+$10.09\%$---as close as any two datasets in the suite---yet the reversed
+enumeration order costs $1.55\times$ the work on the first and saves
+$0.79\times$ on the second. Nor does density order the value of
+threshold sharing (Table~\ref{tab:sharing}). Density is a reasonable
+first guess, because dense data tends to produce a few dominant itemsets
+early, but it is not the governing variable, and no other statistic in
+Table~\ref{tab:datasets} orders the outcomes either.
+ 
+\paragraph{What a practitioner can do instead.}
+The control that resolves the attribution question also answers the
+practical one, because it is cheap. One sequential run of SEQ-REV
+alongside SEQ on a sample measures the order effect directly. Where that
+ratio is well below one---$0.53$ on Chess---a work-stealing scheduler
+converts it into the largest speedup available. Where it is near or
+above one, the order is a liability and a strategy that imposes none is
+the better choice. We state this as a diagnostic rather than a rule,
+because the diagnostic is not sufficient on its own: on Accidents the
+order helps ($0.79$) and fork--join still loses to producer--consumer by
+$24\%$, since the variance and scheduling overhead of work stealing cost
+more than the saved work returns. The safe reading is narrower and holds
+throughout our data: producer--consumer unless the order effect is
+large, and then only if the variance of work stealing is acceptable.
+ 
+\paragraph{Run-to-run variance of work stealing.}
+FJ is the only strategy whose results are not reproducible run to run.
+Which worker first finds a high-utility itemset determines when the
+threshold rises, and therefore how much of the tree the others explore,
+so its join count varies between repetitions and its time varies with it:
+coefficients of variation exceed $10\%$ in $48$ of the $810$ measured
+configurations and reach $36\%$, while SEQ, SEQ-REV, TPB, PC and PLM
+stay at or below $6\%$. Every configuration our validation flags above
+$10\%$ is a fork--join row. The spread is largest at four and eight
+threads but is not confined to them: one Kosarak cell at two threads
+reaches $31\%$, and a single Chess cell at one thread reaches $21\%$,
+the latter being timing noise rather than scheduling nondeterminism,
+since at one thread fork--join's traversal is fixed. This is a property
+of the execution model and not of the measurement: it persists across
+repetitions and does not appear for the statically partitioned or
+queue-based strategies at the same thread counts. It is also a reason to
+prefer a deterministic strategy in production even where fork--join's
+mean is slightly better, as on Mushroom.
 
-Two design lessons follow. First, no single strategy dominates: practitioners
-should pick the strategy from the data regime, and the work ratio---measurable on
-a small sample---predicts which regime applies. Second, super-linear speedup in
-top-$\Kk$ mining is an \emph{algorithmic} effect (cooperative pruning), not a
-hardware one; reporting wall-clock speedup alone is misleading, and the work
-ratio is needed to attribute it correctly.
-
-On attribution: density, not the negative fraction. The regime tracks structural
-density almost perfectly (Table~\ref{tab:datasets}): the two datasets where FJ
-wins, Chess and Mushroom, have densities of $49.3\%$ and $19.3\%$, whereas the
-two where PC wins, Retail and Liquor, are three orders of magnitude sparser
-($0.063\%$ and $0.196\%$). The proportion of negative-profit items does
-\emph{not} explain the split: Chess ($50.7\%$ negative) and Retail ($50.1\%$
-negative) carry almost the same negative fraction yet fall in opposite regimes,
-while Liquor has the fewest negatives ($30.0\%$) and still behaves like Retail.
-Thus, although negative items slow the ascent of $\tau$ all else equal
-(Remark~\ref{rem:sharing}), across these datasets it is density---through its
-effect on how fast a few high-utility itemsets push $\tau$ up---that decides which
-parallel strategy wins, not the negative fraction itself. Disentangling any
-residual effect of the negative fraction would require holding density fixed
-while varying it, which we leave to future work.
-
-\paragraph{Threats to validity.} The item profits are assigned rather than
-intrinsic (except for Liquor, whose profits are real average utilities), so they
-may not reflect a specific application. The existence probabilities, by contrast,
-are intrinsic to the SPMF datasets; because the highest-utility itemsets on Chess,
-Mushroom and Retail happen to be composed of probability-one items, our results on
-these three datasets primarily exercise the density and positive--negative
-dimensions, while Liquor most strongly exercises the probabilistic ranking. The
-hardware is a single hybrid-core laptop CPU under thermal constraints (see
-Section~\ref{sec:setup}), which can add run-to-run variance, particularly for the
-nondeterministic work-stealing strategy; we mitigate this by reporting medians
-over repeated runs. Finally, PLM's partitioning on one dataset (Retail) showed an
-unusually high work ratio that merits closer inspection.
-
+The mechanism is directly visible in one cell. On Kosarak at $\Kk=10$
+with two threads, four of the five repetitions took about $34{,}100$~ms
+while the fifth took $61{,}663$~ms---and that repetition's join count
+was $139{,}291{,}808$, exactly the one-thread count. On that run the
+work-stealing pool never stole, so a two-thread execution performed a
+one-thread traversal.
+ 
+\paragraph{Threats to validity.}
+The utility model is generated rather than measured for eight of the
+nine datasets: quantities, existence probabilities and profit signs come
+from the protocol of Section~\ref{sec:setup}, so the absolute runtimes
+depend on choices we made. Liquor is the exception, carrying real
+quantities, real probabilities and real average utilities, and it
+behaves like its sparse neighbours in every comparison reported here,
+which is evidence that the conclusions are not artefacts of the
+generator. The hardware is a single hybrid-core laptop CPU: at four
+threads the scheduler may place a worker on an efficiency core, which
+interacts with work stealing and contributes to FJ's variance, although
+the one-thread control shows that FJ's pruning behaviour is already
+established before any scheduling across cores occurs. The $\EP$ filter
+is not the binding constraint on these datasets---because $\EP$ takes a
+product over all transactions containing an itemset, it approaches one
+on databases of this size even when individual probabilities are
+small---so the suite exercises the density and positive--negative
+dimensions more strongly than the probabilistic one. Finally, Pumsb was
+probed and did not complete within the timeout at the smallest $\Kk$ even
+after sampling; we report it in Section~\ref{sec:setup} as a limit of the
+present exact core rather than omitting it.
+ 
+ 
 \section{Conclusion}\label{sec:conclusion}
-We have studied the design space of shared-memory parallel mining for the Top-$\Kk$
-Probabilistic Positive--Negative High-Utility Itemset problem, in which top-$\Kk$
-selection, uncertain data and negative profits are combined for the first time
-under a unified parallel treatment. Our starting point is a common mining core
-built on the UPU-List, a utility--probability list that fuses the probabilistic
-and the positive/negative bookkeeping of prior structures. We proved that its
-three pruning bounds---the existential-probability test, the positive
-transaction-weighted utility, and the positive upper bound---remain valid upper
-bounds even when item profits may be negative, so that the resulting top-$\Kk$
-search is exact (Theorem~\ref{thm:correct}).
+ 
+We have studied the design space of shared-memory parallel mining for the
+Top-$\Kk$ Probabilistic Positive--Negative High-Utility Itemset problem,
+in which top-$\Kk$ selection, uncertain data and negative profits meet. On
+a common exact core built on the UPU-List, with three upper bounds proven
+valid under negative profits and under both a discovered and a supplied
+admission threshold, we instantiated four classical parallelisation
+schemes and compared them against each other and against two sequential
+baselines.
+ 
+The methodological result is that a work-ratio metric is not sufficient
+to attribute a parallel speedup. A scheduler can explore less of the tree
+than the baseline for a reason that has nothing to do with parallelism,
+and in our data the work-stealing scheduler does exactly that: on one thread it performs exactly the work of a purely sequential
+reverse-order control---the same join count, to the digit, on all nine
+datasets, and at eight threads its work ratio
+still tracks that control. Without the control, its pruning would have
+been credited to cooperation between workers; with it, the credit goes to
+an enumeration order that a sequential miner can adopt for free---and
+that costs more than it saves on four of the nine datasets.
+ 
+The substantive result is what remains once that confound is removed.
+Sharing the admission threshold, measured on a pair of strategies that
+differ in nothing else, saves between $1.12\times$ and $3.01\times$ of
+the explored work on every dataset, dense and sparse alike. It is the
+only effect in the study that never changes sign, and it is precisely the
+effect that the partition-local pattern used throughout the distributed
+parallel HUIM literature cannot obtain. A producer--consumer scheduler,
+which shares the threshold and imposes no traversal order of its own, is
+the best or joint-best strategy on eight of nine datasets and has the
+mildest worst case of the four.
+ 
+We also delimit these findings. Under a supplied utility threshold they
+all disappear: the work ratio is exactly $1.000$ in every configuration
+measured, because both mechanisms act on a threshold that no longer
+moves. The design question answered here is therefore specific to
+top-$\Kk$ mining rather than general to parallel utility mining. The core
+itself is validated outside our own code, agreeing itemset by itemset
+with an independently written published exact miner on a reduced base
+case.
+ 
+Several directions remain. An adaptive scheduler could measure the
+enumeration-order effect on a sample during Phase~1 and choose its Phase~3
+strategy from it, obtaining fork--join's advantage where the order pays
+and producer--consumer's robustness where it does not. The core would
+benefit from an estimated-utility co-occurrence structure, which prunes
+most on exactly the dense data where the present core is slowest and
+where Pumsb exceeds our budget. Controlled experiments that hold density
+fixed while varying the negative-profit fraction would isolate any
+residual effect of negative items, which our suite cannot separate from
+density. Finally, a server-class processor with uniform cores would
+remove the one hardware effect we could not eliminate, and a distributed
+extension that approximates a shared threshold across nodes would test
+whether the mechanism this paper measures can be recovered at the scale
+where the partition-local pattern currently prevails.
 
-On this core we instantiated four parallelisation strategies that span two design
-axes, threshold sharing and load balancing, and evaluated them against an exact
-sequential baseline. To attribute the observed speedups correctly we introduced a
-\emph{work-ratio} metric, the number of list joins performed relative to the
-sequential baseline, which isolates algorithmic pruning from raw hardware
-parallelism. The central empirical finding is a clear \emph{regime spectrum}. On
-dense data, sharing the admission threshold lets a few early discoveries raise the
-threshold sharply; a work-stealing scheduler propagates this aggressively and
-prunes up to nine tenths of the sequential work, turning eight-thread execution
-into \emph{super-linear} speedup (up to $27.5\times$). On sparse data the
-threshold rises slowly, eager parallel splitting instead creates redundant work,
-and a more measured producer--consumer scheduler becomes the most robust choice.
-The strategy that never shares the threshold is uniformly the weakest and can run
-slower than the sequential baseline, with its penalty largest precisely where
-sharing would have helped most. A separate analysis shows that the regime is
-governed by structural \emph{density} rather than by the negative-profit fraction:
-datasets with nearly identical negative fractions but very different densities fall
-into opposite regimes.
-
-Two practical lessons follow. First, no single parallel strategy dominates;
-the appropriate strategy should be selected from the data regime, and the work
-ratio---measurable on a small sample---predicts which regime applies. Second,
-super-linear speedup in top-$\Kk$ mining is an algorithmic effect of cooperative
-pruning rather than a hardware effect, so reporting wall-clock speedup alone is
-misleading and the work ratio is needed to attribute it correctly.
-
-Several directions remain. An adaptive scheduler could choose a strategy at
-runtime from a cheaply measured work ratio, combining the dense-regime advantage
-of work-stealing with the sparse-regime robustness of producer--consumer.
-Controlled experiments that hold density fixed while varying the negative fraction
-would isolate any residual effect of negative profits. Evaluating the strategies
-on a server-class processor with a higher physical core count, and developing a
-distributed extension that approximates global threshold sharing across nodes,
-would test how far the regime spectrum and the cooperative-pruning effect carry
-beyond the shared-memory, single-machine setting studied here.
-
+\FloatBarrier
 \section*{Declarations}
 
 \bmhead{Funding}
@@ -863,17 +1910,21 @@ animals.
 Not applicable.
 
 \bmhead{Data availability}
-All four base datasets (Chess, Mushroom, Retail and Liquor) are publicly available
-from the SPMF open-source data-mining repository~\cite{fournierviger2014spmf}. The
-positive--negative profit tables and the exact uncertain versions used in our
-experiments were derived from these public datasets as described in
-Section~\ref{sec:setup} and are available from the corresponding author on
-reasonable request.
-
+The nine benchmark files are publicly available from the SPMF
+open-source data-mining repository~\cite{fournierviger2014spmf}. The
+quantities, existence probabilities and positive--negative profit tables
+used in our experiments were generated from those files by the
+deterministic protocol of Section~\ref{sec:setup}, and the generator, its
+seed and the resulting datasets---including the Kosarak and Accidents
+subsets---are deposited at \url{https://zenodo.org/records/20782614}, so
+every dataset used here can be reproduced exactly or downloaded directly.
+ 
 \bmhead{Code availability}
-The Java implementation of the four parallel strategies, the sequential baseline,
-and the shared mining core is available from the corresponding author on
-reasonable request.
+The Java implementation of the mining core, the sequential baselines, the
+four parallel strategies, the experimental harness and the analysis
+scripts that produce the tables and figures of
+Section~\ref{sec:results} are deposited at
+\url{https://zenodo.org/records/20782614}.
 
 \bmhead{Author contributions}
 H.~Vo and N.~Le contributed equally: they designed and implemented the
@@ -1043,6 +2094,41 @@ Li C, Zhang L, Sun A.
 \newblock Parallel High Utility Itemset Mining Algorithm on the Spark.
 \newblock In: Advances in Intelligent Information Hiding and Multimedia Signal
   Processing. Springer; 2024. p. 124--134.
+
+\bibitem[\protect\citeauthoryear{Ashraf et~al.}{2022}]{krishnamoorthy2022tkn}
+Ashraf M, Abdelkader T, Rady S, Gharib TF.
+\newblock {TKN}: An efficient approach for discovering top-k high utility
+  itemsets with positive or negative profits.
+\newblock Information Sciences. 2022;587:654--678.
+
+\bibitem[\protect\citeauthoryear{Singh et~al.}{2026}]{singh2026tkhn}
+Singh K, Kumar R, Singh SS, Mahato DP.
+\newblock {TKHN}: efficient mining of top-{K} high utility itemsets with
+  negative item values.
+\newblock Soft Computing. 2026;30(1):209--225.
+\newblock \doi{10.1007/s00500-025-10930-3}.
+ 
+\bibitem[\protect\citeauthoryear{Tung et~al.}{2026}]{tung2026multicore}
+Tung NT, Nguyen TDD, Vu DL, Nguyen LTT.
+\newblock An efficiency method for mining top-k multi-level high utility
+  itemsets through multi-core parallelism.
+\newblock Cluster Computing. 2026;29(8):466.
+\newblock \doi{10.1007/s10586-026-06242-2}.
+ 
+\bibitem[\protect\citeauthoryear{Zida et~al.}{2017}]{zida2017efim}
+Zida S, Fournier-Viger P, Lin JCW, Wu CW, Tseng VS.
+\newblock {EFIM}: a fast and memory efficient algorithm for high-utility
+  itemset mining.
+\newblock Knowledge and Information Systems. 2017;51(2):595--625.
+\newblock \doi{10.1007/s10115-016-0986-0}.
+ 
+\bibitem[\protect\citeauthoryear{Atmaja and Sonawane}{2023}]{atmaja2023smplb}
+Atmaja EHS, Sonawane K.
+\newblock Optimization of search space division with enhanced shared
+  memory-based utility list buffer miner with a parallel framework
+  ({SM-PLB}) for effective high utility itemset mining.
+\newblock International Journal of Information Technology. 2023;15(3):1597--1609.
+\newblock \doi{10.1007/s41870-023-01195-w}.
 
 \end{thebibliography}
 
